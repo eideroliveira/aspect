@@ -117,6 +117,38 @@ implements, plus the guidance of the frameworks those surfaces use. Keeping
 detail with the owner keeps prompts small and makes drift visible: a module
 that touches an entity it does not own is contradicting what it was shown.
 
+## Importing an existing system
+
+```
+analyze.Go ─▶ inventory (deterministic)
+                 │
+                 ├─▶ Describer × packages ─▶ fragments (cached as JSON)
+                 │
+                 └─▶ Synthesizer (fragments + summary [+ target]) ─▶ synthesis
+                                                                       │
+                          importer.Assemble (deterministic) ◀──────────┘
+                                   │
+                          spec.Validate ─▶ aspect.yaml + warnings
+```
+
+Two modes share the same agents:
+
+- **Mirror** (target language = source): one module per package, dependency
+  edges from the import graph, entities from the fragments (owner = the
+  package that defines the struct), surfaces merged into interfaces by
+  canonical name (`api`, `web`, `admin`, `cli`, `grpc`). The Synthesizer
+  contributes only the system level: intent, goals mapped to modules, stack,
+  interface metadata.
+- **Retarget** (for example Go to Swift): the Synthesizer designs the module
+  list for the target platform from the fragments, with web and admin
+  surfaces becoming `app` screens and the backend API becoming an `http`
+  interface with `role: consumer`. The assembler sanitises identifiers and
+  validates; it does not redesign.
+
+The inventory is the only language-specific part of the importer. Adding a
+source language means adding an analyser that produces the same `Package`
+shape.
+
 ## Trust boundaries
 
 Generated code is executed (`go test -race`) on the machine running Aspect.

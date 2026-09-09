@@ -84,6 +84,36 @@ Flags: `-model` (default `claude-opus-5`, or `$ASPECT_MODEL`), `-effort`
 (`low`…`max`), `-max-repairs` (default 3), `-fallbacks=false` to disable
 server-side refusal fallbacks.
 
+## Importing an existing system
+
+Aspect can recover a spec from an existing Go codebase, and re-express it
+for another platform:
+
+```sh
+aspect inventory ~/src/shop -exclude external            # deterministic, no model calls
+aspect import    ~/src/shop -o shop.yaml                  # same language: one module per package
+aspect import    ~/src/shop -o shop-ios.yaml -language swift \
+                 -hint "an iOS app for members; the admin stays on the web"
+aspect run shop-ios.yaml -out ./out                       # build the SwiftPM package
+```
+
+Import runs in three stages. The **inventory** is deterministic: packages,
+exported API, persistent structs (from ORM tags), routes, tests and the
+dependency graph, from the parser alone. The **Describer** reads one package
+at a time and writes its fragment: intent, candidate goals, entities,
+surfaces, language-neutral operations, invariants and scenarios derived from
+the tests. The **Synthesizer** consolidates fragments into system goals, the
+stack and the interfaces; in retarget mode (target language differs) it also
+designs the module list for the target, turning web pages into app screens
+and keeping the backend API as an interface the app consumes.
+
+Assembly is deterministic again, records provenance under `system.source`,
+and never fails: whatever it cannot reconcile becomes a warning at the top of
+the YAML. Fragments are cached under `.aspect-cache/`, so an interrupted or
+re-run import only pays for packages not yet described. Review the recovered
+intents and goals before running the pipeline: they are the model's reading
+of the code, not the owner's statement of it.
+
 ## Status
 
 Early. What exists today:
@@ -99,6 +129,8 @@ Early. What exists today:
   JSON outputs, prompt caching, streaming, and refusal fallbacks.
 - Workspace runner per language with a timeout.
 - Repair loop and per-module, per-goal report.
+- `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
+  optionally re-expressed for Swift/iOS.
 - Tests run offline against fake clients, including end-to-end pipeline
   tests that exercise a real repair round through the Go toolchain and a
   real build through the Swift toolchain.
@@ -108,6 +140,9 @@ Planned next:
 - Cross-module validation pass once all modules exist (system-level goals).
 - Spec-drift detection: re-run the Validator on an existing codebase against
   an updated spec.
+- Importers for other source languages (the Describer and Synthesizer are
+  language-agnostic; only the inventory is Go-specific).
+- A Swift import guard equivalent to the Go one.
 - More target languages: a profile in `internal/lang` is all a language needs.
 - Parallel module generation for independent subgraphs of the plan.
 

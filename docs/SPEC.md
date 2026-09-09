@@ -52,7 +52,8 @@ system:
 
   interfaces:                  # optional; how the system is exposed
     - name: admin
-      kind: web                # http | web | cli | grpc
+      kind: web                # http | web | cli | grpc | app (native screens)
+      role: provider           # provider (default) | consumer: this system is a client of it
       intent: Back office for staff.
       framework: qor5          # must exist in stack.<language>.frameworks
       auth: staff session
@@ -71,6 +72,13 @@ system:
           request: '{"sku": string, "qty": int}'
           response: '{"available": int}'
           errors: ["409 when fewer than qty are available"]
+
+  source:                      # written by `aspect import`; provenance only
+    language: go
+    repository: git@github.com:org/repo.git
+    commit: 2a630a7d
+    imported_at: 2026-09-09T20:00:00Z
+    frameworks: [chi, gorm, qor5]
 
 modules:                       # at least one; order in the file is irrelevant
   - name: stock
@@ -141,6 +149,16 @@ The spec is language-agnostic; a profile decides the layout and toolchain:
 The import allowlist (standard library + own module + stack modules) is
 enforced by parsing imports for Go. Swift relies on the manifest: a package
 not declared in the stack cannot be resolved.
+
+## Language-neutral notation
+
+A spec can be built for any supported language, so the parts that look like
+code are notation. Interface signatures may be written in the neutral form
+`Reserve(sku: string, qty: int, order: string) -> available: int | error`
+or in a language's syntax; the Coder translates them idiomatically. Entity
+field types use neutral names (`string`, `int`, `int64`, `float`, `bool`,
+`time`, `decimal`, `uuid`, or another entity's name). `aspect import`
+writes specs in this notation so they can be retargeted.
 
 ## Writing good specs
 

@@ -53,7 +53,8 @@ var (
 	dbEngines      = []string{"postgres", "mysql", "sqlite"}
 	migrationModes = []string{"auto", "files"}
 	relationKinds  = []string{"has_one", "has_many", "belongs_to", "many_to_many"}
-	interfaceKinds = []string{"http", "web", "cli", "grpc"}
+	interfaceKinds = []string{"http", "web", "cli", "grpc", "app"}
+	interfaceRoles = []string{"", "provider", "consumer"}
 )
 
 type collector struct {
@@ -263,6 +264,9 @@ func validateInterfaces(c *collector, s *Spec) map[string]bool {
 		if strings.TrimSpace(iface.Intent) == "" {
 			c.add(Error, p+".intent", "is required")
 		}
+		if !oneOf(iface.Role, interfaceRoles) {
+			c.add(Error, p+".role", "%q is not provider or consumer", iface.Role)
+		}
 		if iface.Framework != "" {
 			found := false
 			if ls != nil {
@@ -296,7 +300,7 @@ func validateInterfaces(c *collector, s *Spec) map[string]bool {
 				if sf.Route == "" || sf.Method == "" {
 					c.add(Error, sp, "http surfaces need route and method")
 				}
-			case "web", "grpc":
+			case "web", "grpc", "app":
 				if sf.Route == "" {
 					c.add(Error, sp+".route", "is required for %s surfaces", iface.Kind)
 				}
