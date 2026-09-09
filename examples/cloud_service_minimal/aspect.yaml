@@ -1,0 +1,87 @@
+# One app tier over a hosted backend: the database and the API are external.
+aspect: 1
+
+system:
+  name: notes_app
+  intent: Let a person capture short notes on their phone and find them again later.
+  topology: cloud_service
+  language: swift
+  module_path: com.example.notes
+  goals:
+    - id: G1
+      statement: A note saved on the phone is visible after the app restarts.
+      verify: test
+    - id: G2
+      statement: The app never loses a note because the network was down.
+      verify: invariant
+
+  database:
+    engine: postgres
+    tier: external           # owned by the hosted service; documents the remote model
+    entities:
+      - name: Note
+        intent: One note as stored remotely.
+        fields:
+          - {name: id, type: uuid, key: primary}
+          - {name: body, type: string, required: true}
+          - {name: updated_at, type: time, required: true}
+
+  interfaces:
+    - name: api
+      kind: http
+      intent: The hosted REST endpoints the app calls.
+      provider: external
+      service: Supabase
+      auth: bearer token from the Supabase session
+      surfaces:
+        - name: list_notes
+          method: GET
+          route: /rest/v1/notes
+          entity: Note
+          response: '[{"id": uuid, "body": string, "updated_at": time}]'
+        - name: upsert_note
+          method: POST
+          route: /rest/v1/notes
+          entity: Note
+          request: '{"id": uuid, "body": string, "updated_at": time}'
+          errors: ["401 without a session"]
+    - name: app
+      kind: app
+      intent: The person's screens.
+      surfaces:
+        - name: notes
+          route: /notes
+          intent: List notes, newest first; works offline from the local store.
+        - name: edit
+          route: /notes/{id}
+          intent: Edit one note; saves locally at once and syncs when online.
+
+modules:
+  - name: sync
+    intent: Talk to the hosted API and reconcile it with the local store.
+    goals: [G2]
+    consumes: [api]
+    interface:
+      - name: push
+        signature: "push(note: Note) async -> void | SyncError"
+      - name: pull
+        signature: "pull() async -> [Note] | SyncError"
+    invariants:
+      - A note edited offline is pushed exactly once when the network returns.
+    scenarios:
+      - id: S1
+        given: a note edited while the stub server returns errors
+        when: the server starts answering 200
+        then: the note is pushed once and marked synced
+        goals: [G2]
+  - name: notes_feature
+    intent: The notes and edit screens over a local store.
+    goals: [G1]
+    depends_on: [sync]
+    surfaces: [app]
+    scenarios:
+      - id: S1
+        given: a note saved in a previous launch
+        when: the notes screen loads
+        then: the note is listed
+        goals: [G1]

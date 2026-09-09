@@ -40,11 +40,13 @@ A spec is a YAML document with three layers:
 Goals are the contract. Every goal must be owned by at least one module or
 scenario, every entity by exactly one module, every surface implemented by
 exactly one module, or validation refuses the spec: an orphan could never be
-judged. See [docs/SPEC.md](docs/SPEC.md) for the full format,
+judged. The language reference is [docs/SPEC.md](docs/SPEC.md); see
 [examples/inventory/aspect.yaml](examples/inventory/aspect.yaml) for a
 minimal spec and
 [examples/warehouse_admin/aspect.yaml](examples/warehouse_admin/aspect.yaml)
-for one with a Postgres data model, a qor5 admin and an HTTP API.
+for one with a Postgres data model, a qor5 admin and an HTTP API, and
+[examples/monolith_minimal/aspect.yaml](examples/monolith_minimal/aspect.yaml)
+for the smallest spec that runs.
 
 Specs are language-agnostic. `system.language` picks a profile (`go` or
 `swift` today) that decides layout, manifest and toolchain, so the same spec
