@@ -1,0 +1,150 @@
+# Aspect specification, format version 1.
+# A two-tier solution: a Go backend that owns the database and serves a JSON
+# API, and a Swift iOS app that consumes it. Exercises tiers, providers,
+# consumers and a tier-local cache database.
+aspect: 1
+
+system:
+  name: shop
+  intent: >
+    Let members browse the catalog and reserve products from their phone,
+    with one source of truth for stock so nothing is promised twice.
+  topology: api_backend
+  goals:
+    - id: G1
+      statement: A member can reserve an available product from the app and see the reservation confirmed.
+      verify: test
+    - id: G2
+      statement: Stock never goes negative, whatever the app does.
+      verify: invariant
+    - id: G3
+      statement: The app stays usable offline for browsing what it last saw.
+      verify: test
+    - id: G4
+      statement: The app never talks to the database directly; every read and write goes through the API.
+      verify: review
+
+  database:
+    engine: postgres
+    tier: backend
+    test:
+      engine: sqlite
+    entities:
+      - name: Product
+        intent: A sellable item with its stock.
+        fields:
+          - {name: ID, type: int64, key: primary}
+          - {name: SKU, type: string, required: true, unique: true}
+          - {name: Name, type: string, required: true}
+          - {name: Available, type: int, default: "0"}
+      - name: Reservation
+        intent: Goods held for a member.
+        fields:
+          - {name: ID, type: int64, key: primary}
+          - {name: ProductID, type: int64, required: true}
+          - {name: Member, type: string, required: true}
+          - {name: Qty, type: int, required: true}
+          - {name: At, type: time, required: true}
+        relations:
+          - {kind: belongs_to, entity: Product, via: ProductID}
+
+  interfaces:
+    - name: api
+      kind: http
+      intent: What the app calls.
+      provider: backend
+      auth: bearer token per member
+      surfaces:
+        - name: products
+          method: GET
+          route: /api/products
+          entity: Product
+          operations: [list]
+          response: '[{"sku": string, "name": string, "available": int}]'
+        - name: reserve
+          method: POST
+          route: /api/reservations
+          entity: Reservation
+          request: '{"sku": string, "qty": int}'
+          response: '{"id": int, "available": int}'
+          errors: ["404 unknown SKU", "409 when fewer than qty are available", "400 when qty <= 0", "401 without a token"]
+    - name: app
+      kind: app
+      intent: The member's screens.
+      provider: mobile
+      surfaces:
+        - name: catalog
+          route: /catalog
+          entity: Product
+          intent: List products with availability; works from the cache when offline.
+        - name: reserve
+          route: /catalog/{sku}/reserve
+          entity: Reservation
+          intent: Choose a quantity and confirm; shows the API's error messages.
+
+tiers:
+  - name: backend
+    intent: Own the data and serve the API; the only tier that touches Postgres.
+    language: go
+    module_path: example.com/shop
+    stack:
+      go:
+        orm: {name: gorm, module: gorm.io/gorm}
+        allowed_modules: [gorm.io/driver/]
+    modules:
+      - name: catalog
+        intent: Own Product and Reservation and every write to them.
+        goals: [G2]
+        entities: [Product, Reservation]
+        interface:
+          - name: Reserve
+            signature: "Reserve(ctx, sku: string, member: string, qty: int) -> (reservation: Reservation, available: int) | error"
+            pre: ["qty > 0"]
+        invariants:
+          - Product.Available >= 0 for every product at all times.
+        scenarios:
+          - {id: S1, given: product A with Available 5, when: "Reserve(A, m, 3)", then: Available(A) == 2 and one Reservation exists, goals: [G2]}
+          - {id: S2, given: product A with Available 1, when: "20 concurrent Reserve(A, m, 1)", then: exactly one succeeds, goals: [G2]}
+      - name: api
+        intent: Thin JSON layer over catalog; maps errors to status codes.
+        goals: [G1]
+        depends_on: [catalog]
+        surfaces: [api]
+        scenarios:
+          - {id: S1, given: product A with Available 2, when: "POST /api/reservations {A, 3}", then: 409 and Available(A) is still 2, goals: [G1]}
+          - {id: S2, given: any state, when: "POST /api/reservations without a token", then: 401}
+
+  - name: mobile
+    intent: The members' iOS app, a client of the backend API.
+    language: swift
+    module_path: com.example.shop
+    depends_on: [backend]
+    database:
+      engine: sqlite
+      entities:
+        - name: CachedProduct
+          intent: The last catalog the app saw, for offline browsing.
+          fields:
+            - {name: sku, type: string, key: primary}
+            - {name: name, type: string, required: true}
+            - {name: available, type: int}
+            - {name: fetchedAt, type: time, required: true}
+    modules:
+      - name: api_client
+        intent: Typed client for the backend API; the only module that speaks HTTP.
+        goals: [G4]
+        consumes: [api]
+        interface:
+          - {name: products, signature: "products() async -> [Product] | APIError"}
+          - {name: reserve, signature: "reserve(sku: string, qty: int) async -> Reservation | APIError"}
+        scenarios:
+          - {id: S1, given: a stubbed server answering 409, when: "reserve(A, 3)", then: "APIError.insufficient is thrown", goals: [G4]}
+      - name: catalog_feature
+        intent: Catalog and reserve screens with their view models; caches what it lists.
+        goals: [G1, G3]
+        depends_on: [api_client]
+        entities: [CachedProduct]
+        surfaces: [app]
+        scenarios:
+          - {id: S1, given: the API returns two products, when: the catalog screen loads, then: both are shown and cached, goals: [G1]}
+          - {id: S2, given: a cache from a previous run and no network, when: the catalog screen loads, then: the cached products are shown with an offline notice, goals: [G3]}

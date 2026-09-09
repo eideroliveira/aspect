@@ -49,12 +49,16 @@ var (
 // SupportedLanguages lists the languages the pipeline can build and test.
 var SupportedLanguages = []string{"go", "swift"}
 
+// External is the provider name for interfaces and databases served by a
+// hosted service outside the spec.
+const External = "external"
+
 var (
 	dbEngines      = []string{"postgres", "mysql", "sqlite"}
 	migrationModes = []string{"auto", "files"}
 	relationKinds  = []string{"has_one", "has_many", "belongs_to", "many_to_many"}
 	interfaceKinds = []string{"http", "web", "cli", "grpc", "app"}
-	interfaceRoles = []string{"", "provider", "consumer"}
+	topologies     = []Topology{Monolith, APIBackend, CloudService}
 )
 
 type collector struct {
@@ -74,21 +78,51 @@ func oneOf(v string, set []string) bool {
 	return false
 }
 
+// ctx carries the resolved shape of the spec through validation.
+type ctx struct {
+	s        *Spec
+	tiers    []*Tier
+	multi    bool
+	tierName map[string]bool
+	goals    map[string]bool
+	// entityDB maps entity name to the owning database's tier ("" for the
+	// implicit tier, External for a hosted database).
+	entityDB map[string]string
+	// surfaceProvider maps "iface.surface" to the providing tier.
+	surfaceProvider map[string]string
+	// tierPath maps a tier to its yaml path prefix for modules.
+	modulePath func(t *Tier, i int) string
+}
+
 // Validate checks the semantic rules of a spec: identifiers, references,
-// dependency cycles, goal coverage, and ownership of entities and surfaces.
-// It returns every issue found rather than stopping at the first one, so a
-// user can fix a spec in one pass.
+// dependency cycles, goal coverage, and ownership of entities and surfaces
+// across tiers. It returns every issue found rather than stopping at the
+// first one, so a user can fix a spec in one pass.
 func Validate(s *Spec) Issues {
 	c := &collector{}
-	goals := validateSystem(c, s)
-	validateStack(c, s)
-	entities := validateDatabase(c, s)
-	surfaces := validateInterfaces(c, s)
-	validateModules(c, s, goals, entities, surfaces)
+	x := &ctx{s: s, tiers: s.EffectiveTiers(), multi: len(s.Tiers) > 0, tierName: map[string]bool{}, entityDB: map[string]string{}, surfaceProvider: map[string]string{}}
+	x.modulePath = func(t *Tier, i int) string {
+		if !x.multi {
+			return fmt.Sprintf("modules[%d]", i)
+		}
+		for j := range s.Tiers {
+			if &s.Tiers[j] == t {
+				return fmt.Sprintf("tiers[%d].modules[%d]", j, i)
+			}
+		}
+		return fmt.Sprintf("tiers[?].modules[%d]", i)
+	}
+	x.goals = validateSystem(c, x)
+	validateTiers(c, x)
+	validateDatabases(c, x)
+	validateInterfaces(c, x)
+	validateModules(c, x)
+	validateTopology(c, x)
 	return c.issues
 }
 
-func validateSystem(c *collector, s *Spec) map[string]bool {
+func validateSystem(c *collector, x *ctx) map[string]bool {
+	s := x.s
 	if s.Aspect != Version {
 		c.add(Error, "aspect", "unsupported spec version %d (this build understands %d)", s.Aspect, Version)
 	}
@@ -100,11 +134,32 @@ func validateSystem(c *collector, s *Spec) map[string]bool {
 	if strings.TrimSpace(s.System.Intent) == "" {
 		c.add(Error, "system.intent", "is required: agents cannot judge a system without a stated intent")
 	}
-	if !oneOf(s.System.Language, SupportedLanguages) {
-		c.add(Error, "system.language", "%q is not supported (one of %s)", s.System.Language, strings.Join(SupportedLanguages, ", "))
+	if s.System.Topology != "" {
+		ok := false
+		for _, t := range topologies {
+			if s.System.Topology == t {
+				ok = true
+			}
+		}
+		if !ok {
+			c.add(Error, "system.topology", "%q is not one of monolith, api_backend, cloud_service", s.System.Topology)
+		}
 	}
-	if s.System.ModulePath == "" {
-		c.add(Error, "system.module_path", "is required (the module or package path of the generated code)")
+	if x.multi {
+		if len(s.Modules) > 0 {
+			c.add(Error, "modules", "top-level modules and tiers are exclusive; move the modules into a tier")
+		}
+		if s.System.ModulePath != "" || len(s.System.Stack) > 0 {
+			c.add(Warning, "system", "language, module_path and stack are ignored when tiers are declared; set them per tier")
+		}
+	} else {
+		if !oneOf(s.System.Language, SupportedLanguages) {
+			c.add(Error, "system.language", "%q is not supported (one of %s)", s.System.Language, strings.Join(SupportedLanguages, ", "))
+		}
+		if s.System.ModulePath == "" {
+			c.add(Error, "system.module_path", "is required (the module or package path of the generated code)")
+		}
+		validateStack(c, "system.stack", s.System.Language, s.System.Stack)
 	}
 	if len(s.System.Goals) == 0 {
 		c.add(Error, "system.goals", "at least one goal is required: without goals there is nothing to validate against")
@@ -130,17 +185,73 @@ func validateSystem(c *collector, s *Spec) map[string]bool {
 	return goals
 }
 
-func validateStack(c *collector, s *Spec) {
-	langs := make([]string, 0, len(s.System.Stack))
-	for l := range s.System.Stack {
+func validateTiers(c *collector, x *ctx) {
+	if !x.multi {
+		x.tierName[""] = true
+		return
+	}
+	s := x.s
+	if len(s.Tiers) == 1 {
+		c.add(Warning, "tiers", "a single tier can be written as a plain spec (language, module_path and modules at the top)")
+	}
+	for i, t := range s.Tiers {
+		p := fmt.Sprintf("tiers[%d]", i)
+		if t.Name == "" {
+			c.add(Error, p+".name", "is required")
+		} else if !identRe.MatchString(t.Name) {
+			c.add(Error, p+".name", "%q must match %s", t.Name, identRe)
+		} else if t.Name == External {
+			c.add(Error, p+".name", "%q is reserved for hosted services", External)
+		} else if x.tierName[t.Name] {
+			c.add(Error, p+".name", "duplicate tier %q", t.Name)
+		}
+		x.tierName[t.Name] = true
+		if strings.TrimSpace(t.Intent) == "" {
+			c.add(Error, p+".intent", "is required")
+		}
+		if !oneOf(t.Language, SupportedLanguages) {
+			c.add(Error, p+".language", "%q is not supported (one of %s)", t.Language, strings.Join(SupportedLanguages, ", "))
+		}
+		if t.ModulePath == "" {
+			c.add(Error, p+".module_path", "is required")
+		}
+		if len(t.Modules) == 0 {
+			c.add(Error, p+".modules", "tier %q has no modules", t.Name)
+		}
+		validateStack(c, p+".stack", t.Language, t.Stack)
+	}
+	for i, t := range s.Tiers {
+		for j, d := range t.DependsOn {
+			p := fmt.Sprintf("tiers[%d].depends_on[%d]", i, j)
+			if d == t.Name {
+				c.add(Error, p, "tier %q depends on itself", t.Name)
+			} else if !x.tierName[d] {
+				c.add(Error, p, "unknown tier %q", d)
+			}
+		}
+	}
+	names := make([]string, 0, len(s.Tiers))
+	deps := map[string][]string{}
+	for _, t := range s.Tiers {
+		names = append(names, t.Name)
+		deps[t.Name] = t.DependsOn
+	}
+	if cycle := findCycle(names, deps); cycle != nil {
+		c.add(Error, "tiers", "dependency cycle: %s", strings.Join(cycle, " -> "))
+	}
+}
+
+func validateStack(c *collector, path, language string, stack Stack) {
+	langs := make([]string, 0, len(stack))
+	for l := range stack {
 		langs = append(langs, l)
 	}
 	sort.Strings(langs)
 	for _, lang := range langs {
-		ls := s.System.Stack[lang]
-		p := "system.stack." + lang
-		if lang != s.System.Language {
-			c.add(Warning, p, "configured for %q but system.language is %q; it will be ignored", lang, s.System.Language)
+		ls := stack[lang]
+		p := path + "." + lang
+		if lang != language {
+			c.add(Warning, p, "configured for %q but the language is %q; it will be ignored", lang, language)
 		}
 		names := map[string]bool{}
 		for i, f := range ls.Frameworks {
@@ -166,13 +277,33 @@ func validateStack(c *collector, s *Spec) {
 	}
 }
 
-func validateDatabase(c *collector, s *Spec) map[string]bool {
-	entities := map[string]bool{}
-	db := s.System.Database
-	if db == nil {
-		return entities
+func validateDatabases(c *collector, x *ctx) {
+	s := x.s
+	if db := s.System.Database; db != nil {
+		owner := db.Tier
+		switch {
+		case !x.multi && owner != "" && owner != External:
+			c.add(Error, "system.database.tier", "%q names a tier but the spec has none", owner)
+		case x.multi && owner == "":
+			c.add(Error, "system.database.tier", "is required in a multi-tier spec: name the tier that owns the database, or %q", External)
+		case x.multi && owner != External && !x.tierName[owner]:
+			c.add(Error, "system.database.tier", "unknown tier %q", owner)
+		}
+		validateDatabase(c, x, "system.database", db, owner)
 	}
-	const p = "system.database"
+	for i, t := range s.Tiers {
+		if t.Database == nil {
+			continue
+		}
+		p := fmt.Sprintf("tiers[%d].database", i)
+		if t.Database.Tier != "" {
+			c.add(Warning, p+".tier", "is implied for a tier-local database")
+		}
+		validateDatabase(c, x, p, t.Database, t.Name)
+	}
+}
+
+func validateDatabase(c *collector, x *ctx, p string, db *Database, owner string) {
 	if !oneOf(db.Engine, dbEngines) {
 		c.add(Error, p+".engine", "%q is not one of %s", db.Engine, strings.Join(dbEngines, ", "))
 	}
@@ -182,22 +313,24 @@ func validateDatabase(c *collector, s *Spec) map[string]bool {
 	if !oneOf(db.Test.Engine, dbEngines) {
 		c.add(Error, p+".test.engine", "%q is not one of %s", db.Test.Engine, strings.Join(dbEngines, ", "))
 	}
-	if db.Test.Engine != "sqlite" && db.Test.DSNEnv == "" {
+	if db.Test.Engine != "sqlite" && db.Test.DSNEnv == "" && owner != External {
 		c.add(Warning, p+".test", "tests run against %s but no dsn_env is set; generated tests will need a running database", db.Test.Engine)
 	}
 	if len(db.Entities) == 0 {
 		c.add(Error, p+".entities", "a database with no entities declares nothing to persist")
 	}
+	local := map[string]bool{}
 	for i, e := range db.Entities {
 		ep := fmt.Sprintf("%s.entities[%d]", p, i)
 		if e.Name == "" {
 			c.add(Error, ep+".name", "is required")
 		} else if !entityRe.MatchString(e.Name) {
 			c.add(Error, ep+".name", "%q must match %s", e.Name, entityRe)
-		} else if entities[e.Name] {
-			c.add(Error, ep+".name", "duplicate entity %q", e.Name)
+		} else if _, dup := x.entityDB[e.Name]; dup {
+			c.add(Error, ep+".name", "duplicate entity %q (entity names are unique across all databases)", e.Name)
 		}
-		entities[e.Name] = true
+		x.entityDB[e.Name] = owner
+		local[e.Name] = true
 		if strings.TrimSpace(e.Intent) == "" {
 			c.add(Warning, ep+".intent", "entity %q has no intent; the Validator cannot judge whether it models the right thing", e.Name)
 		}
@@ -229,24 +362,21 @@ func validateDatabase(c *collector, s *Spec) map[string]bool {
 			c.add(Warning, ep, "entity %q has no primary key field; agents will add a surrogate id", e.Name)
 		}
 	}
-	// Relations are checked after all entity names are known.
 	for i, e := range db.Entities {
 		for j, r := range e.Relations {
 			rp := fmt.Sprintf("%s.entities[%d].relations[%d]", p, i, j)
 			if !oneOf(r.Kind, relationKinds) {
 				c.add(Error, rp+".kind", "%q is not one of %s", r.Kind, strings.Join(relationKinds, ", "))
 			}
-			if !entities[r.Entity] {
-				c.add(Error, rp+".entity", "unknown entity %q", r.Entity)
+			if !local[r.Entity] {
+				c.add(Error, rp+".entity", "unknown entity %q in this database", r.Entity)
 			}
 		}
 	}
-	return entities
 }
 
-func validateInterfaces(c *collector, s *Spec) map[string]bool {
-	surfaces := map[string]bool{}
-	ls := s.LanguageStack()
+func validateInterfaces(c *collector, x *ctx) {
+	s := x.s
 	names := map[string]bool{}
 	for i, iface := range s.System.Interfaces {
 		p := fmt.Sprintf("system.interfaces[%d]", i)
@@ -264,20 +394,34 @@ func validateInterfaces(c *collector, s *Spec) map[string]bool {
 		if strings.TrimSpace(iface.Intent) == "" {
 			c.add(Error, p+".intent", "is required")
 		}
-		if !oneOf(iface.Role, interfaceRoles) {
-			c.add(Error, p+".role", "%q is not provider or consumer", iface.Role)
+		provider := iface.Provider
+		switch {
+		case provider == External:
+			if iface.Service == "" {
+				c.add(Warning, p+".service", "external interface %q does not name its service", iface.Name)
+			}
+		case !x.multi && provider != "":
+			c.add(Error, p+".provider", "%q names a tier but the spec has none (use %q for a hosted service)", provider, External)
+		case x.multi && provider == "":
+			c.add(Error, p+".provider", "is required in a multi-tier spec: the tier that serves %q, or %q", iface.Name, External)
+		case x.multi && !x.tierName[provider]:
+			c.add(Error, p+".provider", "unknown tier %q", provider)
 		}
 		if iface.Framework != "" {
+			var stack *LanguageStack
+			if t := s.Tier(provider); t != nil && provider != External {
+				stack = t.LanguageStack()
+			}
 			found := false
-			if ls != nil {
-				for _, f := range ls.Frameworks {
+			if stack != nil {
+				for _, f := range stack.Frameworks {
 					if f.Name == iface.Framework {
 						found = true
 					}
 				}
 			}
 			if !found {
-				c.add(Error, p+".framework", "%q is not declared in system.stack.%s.frameworks", iface.Framework, s.System.Language)
+				c.add(Error, p+".framework", "%q is not declared in the providing tier's stack", iface.Framework)
 			}
 		}
 		if len(iface.Surfaces) == 0 {
@@ -294,7 +438,7 @@ func validateInterfaces(c *collector, s *Spec) map[string]bool {
 				c.add(Error, sp+".name", "duplicate surface %q in interface %q", sf.Name, iface.Name)
 			}
 			seen[sf.Name] = true
-			surfaces[iface.Name+"."+sf.Name] = true
+			x.surfaceProvider[iface.Name+"."+sf.Name] = provider
 			switch iface.Kind {
 			case "http":
 				if sf.Route == "" || sf.Method == "" {
@@ -313,119 +457,176 @@ func validateInterfaces(c *collector, s *Spec) map[string]bool {
 			}
 		}
 	}
-	return surfaces
 }
 
-func validateModules(c *collector, s *Spec, goals, entities, surfaces map[string]bool) {
-	if len(s.Modules) == 0 {
+func validateModules(c *collector, x *ctx) {
+	s := x.s
+	if !x.multi && len(s.Modules) == 0 {
 		c.add(Error, "modules", "at least one module is required")
 	}
-	mods := map[string]bool{}
+	mods := map[string]*Tier{}
 	covered := map[string]bool{}
 	entityOwner := map[string][]string{}
 	surfaceOwner := map[string][]string{}
-	for i, m := range s.Modules {
-		p := fmt.Sprintf("modules[%d]", i)
-		if m.Name == "" {
-			c.add(Error, p+".name", "is required")
-		} else if !identRe.MatchString(m.Name) {
-			c.add(Error, p+".name", "%q must match %s", m.Name, identRe)
-		} else if mods[m.Name] {
-			c.add(Error, p+".name", "duplicate module name %q", m.Name)
-		}
-		mods[m.Name] = true
-		if strings.TrimSpace(m.Intent) == "" {
-			c.add(Error, p+".intent", "is required")
-		}
-		if len(m.Goals) == 0 {
-			c.add(Warning, p+".goals", "module %q owns no goal; the Validator will only check its intent", m.Name)
-		}
-		for j, g := range m.Goals {
-			if !goals[g] {
-				c.add(Error, fmt.Sprintf("%s.goals[%d]", p, j), "unknown goal %q", g)
+	surfaceConsumers := map[string][]string{}
+
+	for _, t := range x.tiers {
+		for i := range t.Modules {
+			m := &t.Modules[i]
+			p := x.modulePath(t, i)
+			if m.Name == "" {
+				c.add(Error, p+".name", "is required")
+			} else if !identRe.MatchString(m.Name) {
+				c.add(Error, p+".name", "%q must match %s", m.Name, identRe)
+			} else if _, dup := mods[m.Name]; dup {
+				c.add(Error, p+".name", "duplicate module name %q (module names are unique across tiers)", m.Name)
 			}
-			covered[g] = true
-		}
-		if len(m.Scenarios) == 0 && len(m.Invariants) == 0 {
-			c.add(Warning, p, "module %q has no scenarios or invariants; tests will be inferred from the interface only", m.Name)
-		}
-		seenScenario := map[string]bool{}
-		for j, sc := range m.Scenarios {
-			sp := fmt.Sprintf("%s.scenarios[%d]", p, j)
-			if sc.ID == "" {
-				c.add(Error, sp+".id", "is required")
-			} else if seenScenario[sc.ID] {
-				c.add(Error, sp+".id", "duplicate scenario id %q in module %q", sc.ID, m.Name)
+			mods[m.Name] = t
+			if strings.TrimSpace(m.Intent) == "" {
+				c.add(Error, p+".intent", "is required")
 			}
-			seenScenario[sc.ID] = true
-			if sc.When == "" || sc.Then == "" {
-				c.add(Error, sp, "scenario needs at least `when` and `then`")
+			if len(m.Goals) == 0 {
+				c.add(Warning, p+".goals", "module %q owns no goal; the Validator will only check its intent", m.Name)
 			}
-			for k, g := range sc.Goals {
-				if !goals[g] {
-					c.add(Error, fmt.Sprintf("%s.goals[%d]", sp, k), "unknown goal %q", g)
+			for j, g := range m.Goals {
+				if !x.goals[g] {
+					c.add(Error, fmt.Sprintf("%s.goals[%d]", p, j), "unknown goal %q", g)
 				}
 				covered[g] = true
 			}
-		}
-		for j, op := range m.Interface {
-			op_ := fmt.Sprintf("%s.interface[%d]", p, j)
-			if op.Name == "" {
-				c.add(Error, op_+".name", "is required")
+			if len(m.Scenarios) == 0 && len(m.Invariants) == 0 {
+				c.add(Warning, p, "module %q has no scenarios or invariants; tests will be inferred from the interface only", m.Name)
 			}
-			if op.Signature == "" {
-				c.add(Error, op_+".signature", "is required so dependents can be generated against a stable contract")
+			seenScenario := map[string]bool{}
+			for j, sc := range m.Scenarios {
+				sp := fmt.Sprintf("%s.scenarios[%d]", p, j)
+				if sc.ID == "" {
+					c.add(Error, sp+".id", "is required")
+				} else if seenScenario[sc.ID] {
+					c.add(Error, sp+".id", "duplicate scenario id %q in module %q", sc.ID, m.Name)
+				}
+				seenScenario[sc.ID] = true
+				if sc.When == "" || sc.Then == "" {
+					c.add(Error, sp, "scenario needs at least `when` and `then`")
+				}
+				for k, g := range sc.Goals {
+					if !x.goals[g] {
+						c.add(Error, fmt.Sprintf("%s.goals[%d]", sp, k), "unknown goal %q", g)
+					}
+					covered[g] = true
+				}
 			}
-		}
-		for j, e := range m.Entities {
-			if !entities[e] {
-				c.add(Error, fmt.Sprintf("%s.entities[%d]", p, j), "unknown entity %q", e)
-				continue
+			for j, op := range m.Interface {
+				op_ := fmt.Sprintf("%s.interface[%d]", p, j)
+				if op.Name == "" {
+					c.add(Error, op_+".name", "is required")
+				}
+				if op.Signature == "" {
+					c.add(Error, op_+".signature", "is required so dependents can be generated against a stable contract")
+				}
 			}
-			entityOwner[e] = append(entityOwner[e], m.Name)
-		}
-		refs, errs := s.ResolveSurfaces(m.Surfaces)
-		for _, err := range errs {
-			c.add(Error, p+".surfaces", "%v", err)
-		}
-		for _, r := range refs {
-			surfaceOwner[r.ID()] = append(surfaceOwner[r.ID()], m.Name)
+			for j, e := range m.Entities {
+				owner, ok := x.entityDB[e]
+				if !ok {
+					c.add(Error, fmt.Sprintf("%s.entities[%d]", p, j), "unknown entity %q", e)
+					continue
+				}
+				if owner == External {
+					c.add(Error, fmt.Sprintf("%s.entities[%d]", p, j), "entity %q lives in an external database; no module can own it", e)
+					continue
+				}
+				if owner != t.Name {
+					c.add(Error, fmt.Sprintf("%s.entities[%d]", p, j), "entity %q belongs to the database of tier %q, not %q", e, owner, t.Name)
+					continue
+				}
+				entityOwner[e] = append(entityOwner[e], m.Name)
+			}
+			refs, errs := s.ResolveSurfaces(m.Surfaces)
+			for _, err := range errs {
+				c.add(Error, p+".surfaces", "%v", err)
+			}
+			for _, r := range refs {
+				id := r.ID()
+				switch provider := x.surfaceProvider[id]; {
+				case provider == External:
+					c.add(Error, p+".surfaces", "surface %q is served by an external service; consume it instead of implementing it", id)
+				case provider != t.Name:
+					c.add(Error, p+".surfaces", "surface %q is provided by tier %q; only that tier's modules may implement it", id, provider)
+				default:
+					surfaceOwner[id] = append(surfaceOwner[id], m.Name)
+				}
+			}
+			refs, errs = s.ResolveSurfaces(m.Consumes)
+			for _, err := range errs {
+				c.add(Error, p+".consumes", "%v", err)
+			}
+			for _, r := range refs {
+				id := r.ID()
+				if provider := x.surfaceProvider[id]; provider != External && provider == t.Name {
+					c.add(Error, p+".consumes", "surface %q is provided by this tier; depend on the implementing module instead of consuming", id)
+					continue
+				}
+				surfaceConsumers[id] = append(surfaceConsumers[id], m.Name)
+			}
 		}
 	}
 
-	// Dependency references and cycles.
-	for i, m := range s.Modules {
-		for j, d := range m.DependsOn {
-			p := fmt.Sprintf("modules[%d].depends_on[%d]", i, j)
-			if d == m.Name {
-				c.add(Error, p, "module %q depends on itself", m.Name)
-			} else if !mods[d] {
-				c.add(Error, p, "unknown module %q", d)
+	// Module dependencies stay inside a tier; cross-tier calls go through
+	// interfaces.
+	for _, t := range x.tiers {
+		names := make([]string, 0, len(t.Modules))
+		deps := map[string][]string{}
+		for i := range t.Modules {
+			m := &t.Modules[i]
+			names = append(names, m.Name)
+			for j, d := range m.DependsOn {
+				p := fmt.Sprintf("%s.depends_on[%d]", x.modulePath(t, i), j)
+				switch dt, ok := mods[d]; {
+				case d == m.Name:
+					c.add(Error, p, "module %q depends on itself", m.Name)
+				case !ok:
+					c.add(Error, p, "unknown module %q", d)
+				case dt != t:
+					c.add(Error, p, "module %q is in tier %q; cross-tier dependencies go through interfaces (consumes)", d, dt.Name)
+				default:
+					deps[m.Name] = append(deps[m.Name], d)
+				}
 			}
 		}
-	}
-	if cycle := findCycle(s); cycle != nil {
-		c.add(Error, "modules", "dependency cycle: %s", strings.Join(cycle, " -> "))
+		if cycle := findCycle(names, deps); cycle != nil {
+			c.add(Error, "modules", "dependency cycle: %s", strings.Join(cycle, " -> "))
+		}
 	}
 
 	// Goal coverage: a goal nobody owns can never be validated.
-	for _, id := range sortedKeys(goals) {
+	for _, id := range sortedKeys(x.goals) {
 		if id != "" && !covered[id] {
 			c.add(Error, "system.goals", "goal %q is not owned by any module or scenario", id)
 		}
 	}
-	// Entity ownership: exactly one module writes each entity.
-	for _, e := range sortedKeys(entities) {
+	// Entity ownership: exactly one module writes each entity of a
+	// generated database.
+	for _, e := range sortedKeys(mapKeys(x.entityDB)) {
+		if x.entityDB[e] == External {
+			continue
+		}
 		switch owners := entityOwner[e]; len(owners) {
 		case 0:
-			c.add(Error, "system.database.entities", "entity %q is not owned by any module", e)
+			c.add(Error, "database.entities", "entity %q is not owned by any module", e)
 		case 1:
 		default:
 			c.add(Error, "modules", "entity %q is owned by several modules (%s); pick one owner", e, strings.Join(owners, ", "))
 		}
 	}
-	// Surface ownership: every surface is implemented somewhere, once.
-	for _, sf := range sortedKeys(surfaces) {
+	// Surface ownership: every provided surface is implemented once; every
+	// external surface is consumed by someone, or it is dead weight.
+	for _, sf := range sortedKeys(mapKeys(x.surfaceProvider)) {
+		if x.surfaceProvider[sf] == External {
+			if len(surfaceConsumers[sf]) == 0 {
+				c.add(Warning, "system.interfaces", "external surface %q is consumed by no module", sf)
+			}
+			continue
+		}
 		switch owners := surfaceOwner[sf]; len(owners) {
 		case 0:
 			c.add(Error, "system.interfaces", "surface %q is not implemented by any module", sf)
@@ -434,6 +635,69 @@ func validateModules(c *collector, s *Spec, goals, entities, surfaces map[string
 			c.add(Error, "modules", "surface %q is implemented by several modules (%s)", sf, strings.Join(owners, ", "))
 		}
 	}
+}
+
+// validateTopology checks the declared topology against the spec's shape.
+func validateTopology(c *collector, x *ctx) {
+	s := x.s
+	declared := s.System.Topology
+	if declared == "" {
+		return
+	}
+	external := 0
+	for _, i := range s.System.Interfaces {
+		if i.Provider == External {
+			external++
+		}
+	}
+	dbExternal := s.System.Database != nil && s.System.Database.Tier == External
+	switch declared {
+	case Monolith:
+		if x.multi && len(s.Tiers) > 1 {
+			c.add(Warning, "system.topology", "monolith declared but %d tiers exist", len(s.Tiers))
+		}
+		if external > 0 || dbExternal {
+			c.add(Warning, "system.topology", "monolith declared but the spec consumes external services")
+		}
+	case APIBackend:
+		if len(s.Tiers) < 2 {
+			c.add(Error, "system.topology", "api_backend needs at least two tiers (a backend serving an API and a frontend consuming it)")
+		} else if !hasCrossTierConsumer(s) {
+			c.add(Error, "system.topology", "api_backend declared but no module consumes a surface provided by another tier")
+		}
+	case CloudService:
+		if external == 0 && !dbExternal {
+			c.add(Error, "system.topology", "cloud_service declared but no interface or database is provided by %q", External)
+		}
+	}
+}
+
+func hasCrossTierConsumer(s *Spec) bool {
+	provider := map[string]string{}
+	for _, i := range s.System.Interfaces {
+		for _, sf := range i.Surfaces {
+			provider[i.Name+"."+sf.Name] = i.Provider
+		}
+	}
+	for _, t := range s.EffectiveTiers() {
+		for _, m := range t.Modules {
+			refs, _ := s.ResolveSurfaces(m.Consumes)
+			for _, r := range refs {
+				if p := provider[r.ID()]; p != "" && p != External && p != t.Name {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func mapKeys(m map[string]string) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
 }
 
 func sortedKeys(m map[string]bool) []string {
@@ -445,14 +709,18 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
-// findCycle returns one dependency cycle as a path (closed, first == last), or nil.
-func findCycle(s *Spec) []string {
+// findCycle returns one dependency cycle among names as a closed path, or nil.
+func findCycle(names []string, deps map[string][]string) []string {
 	const (
 		white = iota
 		gray
 		black
 	)
 	color := map[string]int{}
+	known := map[string]bool{}
+	for _, n := range names {
+		known[n] = true
+	}
 	var stack []string
 	var cycle []string
 
@@ -460,22 +728,21 @@ func findCycle(s *Spec) []string {
 	visit = func(name string) bool {
 		color[name] = gray
 		stack = append(stack, name)
-		m := s.Module(name)
-		if m != nil {
-			for _, d := range m.DependsOn {
-				switch color[d] {
-				case gray:
-					// Close the loop from the first occurrence of d on the stack.
-					for i, n := range stack {
-						if n == d {
-							cycle = append(append([]string{}, stack[i:]...), d)
-							return true
-						}
-					}
-				case white:
-					if s.Module(d) != nil && visit(d) {
+		for _, d := range deps[name] {
+			if !known[d] {
+				continue
+			}
+			switch color[d] {
+			case gray:
+				for i, n := range stack {
+					if n == d {
+						cycle = append(append([]string{}, stack[i:]...), d)
 						return true
 					}
+				}
+			case white:
+				if visit(d) {
+					return true
 				}
 			}
 		}
@@ -483,12 +750,9 @@ func findCycle(s *Spec) []string {
 		color[name] = black
 		return false
 	}
-	names := make([]string, 0, len(s.Modules))
-	for _, m := range s.Modules {
-		names = append(names, m.Name)
-	}
-	sort.Strings(names)
-	for _, n := range names {
+	sorted := append([]string{}, names...)
+	sort.Strings(sorted)
+	for _, n := range sorted {
 		if color[n] == white && visit(n) {
 			return cycle
 		}

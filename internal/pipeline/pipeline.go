@@ -34,6 +34,7 @@ type Options struct {
 
 // ModuleReport is the outcome for one module.
 type ModuleReport struct {
+	Tier       string         `json:"tier,omitempty"`
 	Module     string         `json:"module"`
 	Iterations int            `json:"iterations"`
 	TestsOK    bool           `json:"tests_ok"`
@@ -49,8 +50,11 @@ type ModuleReport struct {
 
 // Report is the outcome of a whole run.
 type Report struct {
-	System   string         `json:"system"`
-	Language string         `json:"language"`
+	System   string        `json:"system"`
+	Topology spec.Topology `json:"topology"`
+	Language string        `json:"language"`
+	// Tiers lists tier names in build order with their output directories.
+	Tiers    []TierOutput   `json:"tiers,omitempty"`
 	Model    string         `json:"model"`
 	Started  time.Time      `json:"started"`
 	Finished time.Time      `json:"finished"`
@@ -58,6 +62,13 @@ type Report struct {
 	Usage    llm.Usage      `json:"usage"`
 	// Goals summarises every system goal across modules.
 	Goals []GoalSummary `json:"goals"`
+}
+
+// TierOutput records where a tier was generated.
+type TierOutput struct {
+	Name     string `json:"name"`
+	Language string `json:"language"`
+	Dir      string `json:"dir"`
 }
 
 // GoalSummary rolls a goal's verdicts up across the modules that own it.
@@ -97,47 +108,68 @@ func (r *Runner) logf(format string, args ...any) {
 	fmt.Fprintf(r.Opts.Log, format+"\n", args...)
 }
 
-// Toolchain adapts a language profile and a spec to what the workspace needs.
-func Toolchain(p *lang.Profile, s *spec.Spec) workspace.Toolchain {
+// Toolchain adapts a language profile and a tier to what the workspace needs.
+func Toolchain(p *lang.Profile, s *spec.Spec, t *spec.Tier) workspace.Toolchain {
 	return workspace.Toolchain{
 		SourceExt: p.SourceExt,
 		Protected: []string{"go.mod", "go.sum", "Package.swift", "Package.resolved"},
-		Init:      func(root string) error { return p.Init(root, s) },
-		Sync:      func(root string, mods []string) error { return p.Sync(root, s, mods) },
+		Init:      func(root string) error { return p.Init(root, s, t) },
+		Sync:      func(root string, mods []string) error { return p.Sync(root, s, t, mods) },
 		Steps:     p.Steps,
 	}
 }
 
-// Run executes the plan. It keeps going after a module fails so the report
-// shows every module's state; the error returned summarises failures.
-func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, error) {
-	profile, err := lang.For(s.System.Language)
-	if err != nil {
-		return nil, err
+// TierDir is where a tier's code goes: out/<system>/ for a single-tier
+// spec, out/<system>/<tier>/ otherwise.
+func TierDir(outDir, system, tier string) string {
+	if tier == "" {
+		return filepath.Join(outDir, system)
 	}
-	root := filepath.Join(r.Opts.OutDir, s.System.Name)
-	ws, err := workspace.New(root, Toolchain(profile, s))
-	if err != nil {
-		return nil, err
-	}
-	rep := &Report{System: s.System.Name, Language: s.System.Language, Model: r.Opts.Model, Started: time.Now()}
-	var failed, generated []string
+	return filepath.Join(outDir, system, tier)
+}
 
-	for _, step := range p.Steps {
-		if ctx.Err() != nil {
-			return rep, ctx.Err()
+// Run executes the plan tier by tier. It keeps going after a module fails
+// so the report shows every module's state; the error returned summarises
+// failures.
+func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, error) {
+	rep := &Report{System: s.System.Name, Topology: p.Topology, Model: r.Opts.Model, Started: time.Now()}
+	if len(p.Tiers) > 0 {
+		rep.Language = p.Tiers[0].Language
+	}
+	var failed []string
+
+	for _, tp := range p.Tiers {
+		tier := s.Tier(tp.Name)
+		profile, err := lang.For(tier.Language)
+		if err != nil {
+			return rep, err
 		}
-		r.logf("== module %s (goals %s)", step.Module, strings.Join(step.Goals, ","))
-		generated = append(generated, step.Module)
-		mr := r.runModule(ctx, s, profile, step, ws, generated)
-		rep.Modules = append(rep.Modules, mr)
-		rep.Usage.Calls += mr.Usage.Calls
-		rep.Usage.InputTokens += mr.Usage.InputTokens
-		rep.Usage.OutputTokens += mr.Usage.OutputTokens
-		rep.Usage.CacheReadTokens += mr.Usage.CacheReadTokens
-		if mr.Error != "" {
-			failed = append(failed, step.Module)
-			r.logf("   error: %s", mr.Error)
+		root := TierDir(r.Opts.OutDir, s.System.Name, tier.Name)
+		ws, err := workspace.New(root, Toolchain(profile, s, tier))
+		if err != nil {
+			return rep, err
+		}
+		rep.Tiers = append(rep.Tiers, TierOutput{Name: tier.Name, Language: tier.Language, Dir: root})
+		if tier.Name != "" {
+			r.logf("#### tier %s (%s) -> %s", tier.Name, tier.Language, root)
+		}
+		var generated []string
+		for _, step := range tp.Steps {
+			if ctx.Err() != nil {
+				return rep, ctx.Err()
+			}
+			r.logf("== module %s (goals %s)", step.Module, strings.Join(step.Goals, ","))
+			generated = append(generated, step.Module)
+			mr := r.runModule(ctx, s, tier, profile, step, ws, generated)
+			rep.Modules = append(rep.Modules, mr)
+			rep.Usage.Calls += mr.Usage.Calls
+			rep.Usage.InputTokens += mr.Usage.InputTokens
+			rep.Usage.OutputTokens += mr.Usage.OutputTokens
+			rep.Usage.CacheReadTokens += mr.Usage.CacheReadTokens
+			if mr.Error != "" {
+				failed = append(failed, step.Module)
+				r.logf("   error: %s", mr.Error)
+			}
 		}
 	}
 	rep.Finished = time.Now()
@@ -148,16 +180,16 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 	return rep, nil
 }
 
-func (r *Runner) runModule(ctx context.Context, s *spec.Spec, profile *lang.Profile, step plan.Step, ws *workspace.Workspace, generated []string) ModuleReport {
+func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, profile *lang.Profile, step plan.Step, ws *workspace.Workspace, generated []string) ModuleReport {
 	start := time.Now()
-	mr := ModuleReport{Module: step.Module}
+	mr := ModuleReport{Tier: tier.Name, Module: step.Module}
 	fail := func(err error) ModuleReport {
 		mr.Error = err.Error()
 		mr.Duration = time.Since(start)
 		return mr
 	}
-	task := agents.Task{Spec: s, Module: s.Module(step.Module), Lang: profile}
-	allowed := s.AllowedImports()
+	task := agents.Task{Spec: s, Tier: tier, Module: tier.Module(step.Module), Lang: profile}
+	allowed := tier.AllowedImports()
 	deps, err := dependencyFiles(ws, profile, step.DependsOn)
 	if err != nil {
 		return fail(err)

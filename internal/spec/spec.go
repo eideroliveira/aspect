@@ -32,51 +32,87 @@ const (
 	VerifyReview VerifyMethod = "review"
 )
 
-// Spec is the root document.
+// Spec is the root document. A single-tier spec puts language, module path,
+// stack and modules directly under system and at the top level; a
+// multi-tier spec puts them under tiers instead.
 type Spec struct {
-	Aspect  int      `yaml:"aspect"`
-	System  System   `yaml:"system"`
-	Modules []Module `yaml:"modules"`
+	Aspect  int      `yaml:"aspect" json:"aspect"`
+	System  System   `yaml:"system" json:"system"`
+	Tiers   []Tier   `yaml:"tiers,omitempty" json:"tiers,omitempty"`
+	Modules []Module `yaml:"modules,omitempty" json:"modules,omitempty"`
+}
+
+// Topology names the shape of the solution.
+type Topology string
+
+const (
+	// Monolith is one tier that owns the database and serves every interface.
+	Monolith Topology = "monolith"
+	// APIBackend is a frontend tier (web or mobile app) consuming an API
+	// served by a backend tier that owns the database.
+	APIBackend Topology = "api_backend"
+	// CloudService is one generated app tier consuming interfaces and a
+	// database provided by an external, hosted service.
+	CloudService Topology = "cloud_service"
+)
+
+// Tier is one deployable unit with its own language and toolchain: a
+// backend service, a web frontend, a mobile app. Tiers talk to each other
+// only through interfaces.
+type Tier struct {
+	Name       string `yaml:"name" json:"name"`
+	Intent     string `yaml:"intent" json:"intent"`
+	Language   string `yaml:"language,omitempty" json:"language,omitempty"`
+	ModulePath string `yaml:"module_path,omitempty" json:"module_path,omitempty"`
+	// DependsOn orders tiers: a consumer is built after its provider.
+	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Stack     Stack    `yaml:"stack,omitempty" json:"stack,omitempty"`
+	// Database local to this tier (an app's cache). The system database is
+	// owned by the tier named in Database.Tier.
+	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
+	Modules  []Module  `yaml:"modules" json:"modules"`
 }
 
 // System describes the whole program the agents must produce.
 type System struct {
-	Name        string   `yaml:"name"`
-	Intent      string   `yaml:"intent,omitempty"`
-	Language    string   `yaml:"language,omitempty"`
-	ModulePath  string   `yaml:"module_path,omitempty"`
-	Goals       []Goal   `yaml:"goals,omitempty"`
-	Constraints []string `yaml:"constraints,omitempty"`
+	Name   string `yaml:"name" json:"name"`
+	Intent string `yaml:"intent" json:"intent"`
+	// Topology is monolith, api_backend or cloud_service. Derived when empty.
+	Topology    Topology `yaml:"topology,omitempty" json:"topology,omitempty"`
+	Language    string   `yaml:"language,omitempty" json:"language,omitempty"`
+	ModulePath  string   `yaml:"module_path,omitempty" json:"module_path,omitempty"`
+	Goals       []Goal   `yaml:"goals,omitempty" json:"goals,omitempty"`
+	Constraints []string `yaml:"constraints,omitempty" json:"constraints,omitempty"`
 	// Stack holds language-specific configuration keyed by language name
 	// ("go", "python", ...). Only the entry for System.Language is used.
-	Stack Stack `yaml:"stack,omitempty"`
+	Stack Stack `yaml:"stack,omitempty" json:"stack,omitempty"`
 	// Database, when present, declares the persistent data model.
-	Database *Database `yaml:"database,omitempty"`
+	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
 	// Interfaces declare how the system is exposed: HTTP APIs, web UIs,
 	// command lines, gRPC services, native app screens.
-	Interfaces []Interface `yaml:"interfaces,omitempty"`
+	Interfaces []Interface `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
 	// Source records where an imported spec came from. Absent for specs
 	// written by hand.
-	Source *Source `yaml:"source,omitempty"`
+	Source *Source `yaml:"source,omitempty" json:"source,omitempty"`
 }
 
 // Source is the provenance of a spec produced by `aspect import`.
 type Source struct {
-	Language   string `yaml:"language,omitempty"`
-	Repository string `yaml:"repository,omitempty"`
-	Commit     string `yaml:"commit,omitempty"`
-	ImportedAt string `yaml:"imported_at,omitempty"`
+	Language   string `yaml:"language,omitempty" json:"language,omitempty"`
+	Repository string `yaml:"repository,omitempty" json:"repository,omitempty"`
+	Commit     string `yaml:"commit,omitempty" json:"commit,omitempty"`
+	ImportedAt string `yaml:"imported_at,omitempty" json:"imported_at,omitempty"`
 	// Frameworks detected in the source, kept for reference when the target
 	// language differs and the stack section cannot carry them.
-	Frameworks []string `yaml:"frameworks,omitempty"`
+	Frameworks []string `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
 }
 
 // Goal is an outcome the finished system must achieve. Every goal is owned by at
 // least one module, and the Validator issues a verdict per goal.
 type Goal struct {
-	ID        string       `yaml:"id"`
-	Statement string       `yaml:"statement"`
-	Verify    VerifyMethod `yaml:"verify"`
+	ID        string       `yaml:"id" json:"id"`
+	Statement string       `yaml:"statement" json:"statement"`
+	Verify    VerifyMethod `yaml:"verify" json:"verify"`
 }
 
 // Stack maps a language name to its configuration.
@@ -87,162 +123,172 @@ type Stack map[string]LanguageStack
 // every language; "module" means an import path in Go, a package in Python.
 type LanguageStack struct {
 	// Version of the language toolchain, e.g. "1.26".
-	Version string `yaml:"version,omitempty"`
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
 	// Frameworks the system is built on, e.g. qor5 for a Go admin UI.
-	Frameworks []Framework `yaml:"frameworks,omitempty"`
+	Frameworks []Framework `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
 	// ORM, when the database is accessed through one.
-	ORM *Framework `yaml:"orm,omitempty"`
+	ORM *Framework `yaml:"orm,omitempty" json:"orm,omitempty"`
 	// AllowedModules are import-path prefixes generated code may import in
 	// addition to the standard library, the system's own module, and the
 	// modules of Frameworks and ORM. The pipeline enforces this list.
-	AllowedModules []string `yaml:"allowed_modules,omitempty"`
+	AllowedModules []string `yaml:"allowed_modules,omitempty" json:"allowed_modules,omitempty"`
 	// Guidance is free-text advice for the Coder and Tester: conventions,
 	// project layout, idioms to follow or avoid.
-	Guidance string `yaml:"guidance,omitempty"`
+	Guidance string `yaml:"guidance,omitempty" json:"guidance,omitempty"`
 }
 
 // Framework is a library the generated code builds on.
 type Framework struct {
-	Name    string `yaml:"name"`
-	Module  string `yaml:"module,omitempty"`
-	Version string `yaml:"version,omitempty"`
-	Purpose string `yaml:"purpose,omitempty"`
+	Name    string `yaml:"name" json:"name"`
+	Module  string `yaml:"module,omitempty" json:"module,omitempty"`
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 	// Guidance tells agents how this framework is meant to be used here.
-	Guidance string `yaml:"guidance,omitempty"`
+	Guidance string `yaml:"guidance,omitempty" json:"guidance,omitempty"`
 }
 
 // Database declares persistence.
 type Database struct {
 	// Engine is postgres, mysql or sqlite.
-	Engine string `yaml:"engine"`
+	Engine string `yaml:"engine" json:"engine"`
+	// Tier that owns the system database in a multi-tier spec, or
+	// "external" when a hosted service owns it (cloud_service topology).
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
 	// Migrations is "auto" (the ORM migrates the schema at startup) or
 	// "files" (versioned migration files are generated).
-	Migrations string `yaml:"migrations,omitempty"`
+	Migrations string `yaml:"migrations,omitempty" json:"migrations,omitempty"`
 	// Test says which database the generated tests run against.
-	Test DBTest `yaml:"test,omitempty"`
+	Test DBTest `yaml:"test,omitempty" json:"test,omitempty"`
 	// Entities are the persistent types.
-	Entities []Entity `yaml:"entities,omitempty"`
+	Entities []Entity `yaml:"entities,omitempty" json:"entities,omitempty"`
 }
 
 // DBTest configures the database used by generated tests.
 type DBTest struct {
 	// Engine used by tests; sqlite means an in-memory database needing no
 	// external service. Defaults to sqlite unless Database.Engine is sqlite.
-	Engine string `yaml:"engine"`
+	Engine string `yaml:"engine" json:"engine"`
 	// DSNEnv names an environment variable; when it is set at test time the
 	// tests connect to that DSN instead of the test engine default.
-	DSNEnv string `yaml:"dsn_env,omitempty"`
+	DSNEnv string `yaml:"dsn_env,omitempty" json:"dsn_env,omitempty"`
 }
 
 // Entity is one persistent type (a table, a collection).
 type Entity struct {
-	Name        string     `yaml:"name"`
-	Intent      string     `yaml:"intent,omitempty"`
-	Fields      []Field    `yaml:"fields"`
-	Relations   []Relation `yaml:"relations,omitempty"`
-	Constraints []string   `yaml:"constraints,omitempty"`
+	Name        string     `yaml:"name" json:"name"`
+	Intent      string     `yaml:"intent,omitempty" json:"intent,omitempty"`
+	Fields      []Field    `yaml:"fields" json:"fields"`
+	Relations   []Relation `yaml:"relations,omitempty" json:"relations,omitempty"`
+	Constraints []string   `yaml:"constraints,omitempty" json:"constraints,omitempty"`
 }
 
 // Field is one attribute of an entity.
 type Field struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Type is expressed in the target language's terms (Go: string, int64,
 	// time.Time, decimal). Agents map it to the database column type.
-	Type string `yaml:"type"`
+	Type string `yaml:"type" json:"type"`
 	// Key is "primary" for the primary key, empty otherwise.
-	Key      string `yaml:"key,omitempty"`
-	Required bool   `yaml:"required,omitempty"`
-	Unique   bool   `yaml:"unique,omitempty"`
-	Default  string `yaml:"default,omitempty"`
-	Intent   string `yaml:"intent,omitempty"`
+	Key      string `yaml:"key,omitempty" json:"key,omitempty"`
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
+	Unique   bool   `yaml:"unique,omitempty" json:"unique,omitempty"`
+	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	Intent   string `yaml:"intent,omitempty" json:"intent,omitempty"`
 }
 
 // Relation links two entities.
 type Relation struct {
 	// Kind is has_one, has_many, belongs_to or many_to_many.
-	Kind   string `yaml:"kind"`
-	Entity string `yaml:"entity,omitempty"`
+	Kind   string `yaml:"kind" json:"kind"`
+	Entity string `yaml:"entity,omitempty" json:"entity,omitempty"`
 	// Via names the field or join table carrying the relation.
-	Via    string `yaml:"via,omitempty"`
-	Intent string `yaml:"intent,omitempty"`
+	Via    string `yaml:"via,omitempty" json:"via,omitempty"`
+	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
 }
 
 // Interface is one way the system is exposed to users or other systems.
 type Interface struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Kind is http, web, cli, grpc or app (native screens).
-	Kind   string `yaml:"kind"`
-	Intent string `yaml:"intent,omitempty"`
-	// Role is "provider" (default: this system serves the interface) or
-	// "consumer" (this system is a client of an interface served elsewhere,
-	// as an iOS app is of its backend API). Consumer surfaces are
-	// implemented as clients.
-	Role string `yaml:"role,omitempty"`
+	Kind   string `yaml:"kind" json:"kind"`
+	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
+	// Provider is the tier that serves this interface, or "external" when a
+	// service outside the spec does (a hosted backend, a third-party API).
+	// Empty means the only tier of a single-tier spec. Other tiers reach the
+	// interface through modules that list it under consumes.
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// Service names the external provider when Provider is "external"
+	// (for example "Supabase" or "Firebase").
+	Service string `yaml:"service,omitempty" json:"service,omitempty"`
 	// Framework names an entry in Stack[language].Frameworks used to build
 	// this interface (for example "qor5" for a web admin).
-	Framework string `yaml:"framework,omitempty"`
+	Framework string `yaml:"framework,omitempty" json:"framework,omitempty"`
 	// Auth describes who may use this interface; surfaces can override it.
-	Auth     string    `yaml:"auth,omitempty"`
-	Surfaces []Surface `yaml:"surfaces,omitempty"`
+	Auth     string    `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Surfaces []Surface `yaml:"surfaces,omitempty" json:"surfaces,omitempty"`
 }
 
 // Surface is one endpoint, page, command or RPC of an interface.
 type Surface struct {
-	Name   string `yaml:"name"`
-	Intent string `yaml:"intent,omitempty"`
+	Name   string `yaml:"name" json:"name"`
+	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
 	// Route is the path (http, web), command name (cli), RPC name (grpc) or
 	// navigation path (app).
-	Route string `yaml:"route"`
+	Route string `yaml:"route" json:"route"`
 	// Method is the HTTP method for http surfaces.
-	Method string `yaml:"method,omitempty"`
+	Method string `yaml:"method,omitempty" json:"method,omitempty"`
 	// Entity the surface operates on, when it is a CRUD surface.
-	Entity string `yaml:"entity,omitempty"`
+	Entity string `yaml:"entity,omitempty" json:"entity,omitempty"`
 	// Operations for entity-bound surfaces: list, create, read, update, delete
 	// or a custom verb.
-	Operations []string `yaml:"operations,omitempty"`
-	Request    string   `yaml:"request,omitempty"`
-	Response   string   `yaml:"response,omitempty"`
-	Errors     []string `yaml:"errors,omitempty"`
-	Auth       string   `yaml:"auth,omitempty"`
+	Operations []string `yaml:"operations,omitempty" json:"operations,omitempty"`
+	Request    string   `yaml:"request,omitempty" json:"request,omitempty"`
+	Response   string   `yaml:"response,omitempty" json:"response,omitempty"`
+	Errors     []string `yaml:"errors,omitempty" json:"errors,omitempty"`
+	Auth       string   `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // Module is a unit of implementation with its own intent. Modules are generated
 // in dependency order, each one seeing the interfaces of its dependencies.
 type Module struct {
-	Name        string      `yaml:"name"`
-	Intent      string      `yaml:"intent,omitempty"`
-	Goals       []string    `yaml:"goals,omitempty"`
-	DependsOn   []string    `yaml:"depends_on,omitempty"`
-	Interface   []Operation `yaml:"interface,omitempty"`
-	Invariants  []string    `yaml:"invariants,omitempty"`
-	Scenarios   []Scenario  `yaml:"scenarios,omitempty"`
-	Constraints []string    `yaml:"constraints,omitempty"`
+	Name        string      `yaml:"name" json:"name"`
+	Intent      string      `yaml:"intent" json:"intent"`
+	Goals       []string    `yaml:"goals,omitempty" json:"goals,omitempty"`
+	DependsOn   []string    `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Interface   []Operation `yaml:"interface,omitempty" json:"interface,omitempty"`
+	Invariants  []string    `yaml:"invariants,omitempty" json:"invariants,omitempty"`
+	Scenarios   []Scenario  `yaml:"scenarios,omitempty" json:"scenarios,omitempty"`
+	Constraints []string    `yaml:"constraints,omitempty" json:"constraints,omitempty"`
 	// Entities this module owns: it defines the persistent type and is the
 	// only module that writes it.
-	Entities []string `yaml:"entities,omitempty"`
+	Entities []string `yaml:"entities,omitempty" json:"entities,omitempty"`
 	// Surfaces this module implements, as "interface.surface" or "interface"
-	// for every surface of that interface.
-	Surfaces []string `yaml:"surfaces,omitempty"`
+	// for every surface of that interface. Only modules in the providing
+	// tier may implement.
+	Surfaces []string `yaml:"surfaces,omitempty" json:"surfaces,omitempty"`
+	// Consumes lists surfaces this module is a client of, served by another
+	// tier or an external service, in the same notation.
+	Consumes []string `yaml:"consumes,omitempty" json:"consumes,omitempty"`
 }
 
 // Operation is one exported function or method the module must expose, with
 // optional design-by-contract clauses.
 type Operation struct {
-	Name      string   `yaml:"name"`
-	Signature string   `yaml:"signature"`
-	Intent    string   `yaml:"intent,omitempty"`
-	Pre       []string `yaml:"pre,omitempty"`
-	Post      []string `yaml:"post,omitempty"`
+	Name      string   `yaml:"name" json:"name"`
+	Signature string   `yaml:"signature" json:"signature"`
+	Intent    string   `yaml:"intent,omitempty" json:"intent,omitempty"`
+	Pre       []string `yaml:"pre,omitempty" json:"pre,omitempty"`
+	Post      []string `yaml:"post,omitempty" json:"post,omitempty"`
 }
 
 // Scenario is a Given/When/Then example. The Tester agent turns each scenario
 // into at least one test, and the Validator checks that mapping exists.
 type Scenario struct {
-	ID    string   `yaml:"id"`
-	Given string   `yaml:"given,omitempty"`
-	When  string   `yaml:"when"`
-	Then  string   `yaml:"then"`
-	Goals []string `yaml:"goals,omitempty"`
+	ID    string   `yaml:"id" json:"id"`
+	Given string   `yaml:"given,omitempty" json:"given,omitempty"`
+	When  string   `yaml:"when" json:"when"`
+	Then  string   `yaml:"then" json:"then"`
+	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty"`
 }
 
 // Load reads and parses a spec file. It does not validate semantics; call
@@ -276,7 +322,12 @@ func (s *Spec) applyDefaults() {
 			s.System.Goals[i].Verify = VerifyTest
 		}
 	}
-	if db := s.System.Database; db != nil {
+	for i := range s.Tiers {
+		if s.Tiers[i].Language == "" {
+			s.Tiers[i].Language = "go"
+		}
+	}
+	for _, db := range s.Databases() {
 		if db.Migrations == "" {
 			db.Migrations = "auto"
 		}
@@ -286,14 +337,96 @@ func (s *Spec) applyDefaults() {
 	}
 }
 
-// Module returns the module with the given name, or nil.
-func (s *Spec) Module(name string) *Module {
-	for i := range s.Modules {
-		if s.Modules[i].Name == name {
-			return &s.Modules[i]
+// EffectiveTiers returns the tiers of the spec. A single-tier spec yields
+// one tier with an empty name carrying the system's language, module path,
+// stack and modules, so callers never branch on the spec's shape.
+func (s *Spec) EffectiveTiers() []*Tier {
+	if len(s.Tiers) > 0 {
+		out := make([]*Tier, len(s.Tiers))
+		for i := range s.Tiers {
+			out[i] = &s.Tiers[i]
+		}
+		return out
+	}
+	return []*Tier{s.implicitTier()}
+}
+
+// implicitTier views a single-tier spec as a tier. The returned tier shares
+// the spec's module slice, so edits through it reach the spec.
+func (s *Spec) implicitTier() *Tier {
+	return &Tier{
+		Name:       "",
+		Intent:     s.System.Intent,
+		Language:   s.System.Language,
+		ModulePath: s.System.ModulePath,
+		Stack:      s.System.Stack,
+		Modules:    s.Modules,
+	}
+}
+
+// Tier returns the tier with the given name, or nil. The empty name returns
+// the implicit tier of a single-tier spec.
+func (s *Spec) Tier(name string) *Tier {
+	for _, t := range s.EffectiveTiers() {
+		if t.Name == name {
+			return t
 		}
 	}
 	return nil
+}
+
+// AllModules returns every module across tiers, in tier order.
+func (s *Spec) AllModules() []*Module {
+	var out []*Module
+	for _, t := range s.EffectiveTiers() {
+		for i := range t.Modules {
+			out = append(out, &t.Modules[i])
+		}
+	}
+	return out
+}
+
+// Module returns the module with the given name in any tier, or nil.
+func (s *Spec) Module(name string) *Module {
+	for _, m := range s.AllModules() {
+		if m.Name == name {
+			return m
+		}
+	}
+	return nil
+}
+
+// TierOf returns the tier containing the named module, or nil.
+func (s *Spec) TierOf(module string) *Tier {
+	for _, t := range s.EffectiveTiers() {
+		for i := range t.Modules {
+			if t.Modules[i].Name == module {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+// EffectiveTopology returns the declared topology, or derives it: one tier
+// with an external provider is cloud_service, several tiers are
+// api_backend, otherwise monolith.
+func (s *Spec) EffectiveTopology() Topology {
+	if s.System.Topology != "" {
+		return s.System.Topology
+	}
+	if len(s.Tiers) > 1 {
+		return APIBackend
+	}
+	for _, i := range s.System.Interfaces {
+		if i.Provider == "external" {
+			return CloudService
+		}
+	}
+	if s.System.Database != nil && s.System.Database.Tier == "external" {
+		return CloudService
+	}
+	return Monolith
 }
 
 // Goal returns the system goal with the given id, or nil.
@@ -306,22 +439,70 @@ func (s *Spec) Goal(id string) *Goal {
 	return nil
 }
 
-// LanguageStack returns the stack configuration for System.Language, or nil.
+// LanguageStack returns the stack configuration of the first tier, or nil.
+// Multi-tier callers use Tier.LanguageStack.
 func (s *Spec) LanguageStack() *LanguageStack {
-	if ls, ok := s.System.Stack[s.System.Language]; ok {
+	return s.EffectiveTiers()[0].LanguageStack()
+}
+
+// LanguageStack returns the tier's stack for its language, or nil.
+func (t *Tier) LanguageStack() *LanguageStack {
+	if ls, ok := t.Stack[t.Language]; ok {
 		return &ls
 	}
 	return nil
 }
 
-// Entity returns the database entity with the given name, or nil.
-func (s *Spec) Entity(name string) *Entity {
-	if s.System.Database == nil {
-		return nil
+// Module returns the tier's module with the given name, or nil.
+func (t *Tier) Module(name string) *Module {
+	for i := range t.Modules {
+		if t.Modules[i].Name == name {
+			return &t.Modules[i]
+		}
 	}
-	for i := range s.System.Database.Entities {
-		if s.System.Database.Entities[i].Name == name {
-			return &s.System.Database.Entities[i]
+	return nil
+}
+
+// AllowedImports lists the import-path prefixes generated code in this tier
+// may use beyond the standard library: the tier's own module, every
+// framework and ORM module, and the explicit allowlist.
+func (t *Tier) AllowedImports() []string {
+	out := []string{t.ModulePath}
+	if ls := t.LanguageStack(); ls != nil {
+		for _, f := range ls.Frameworks {
+			if f.Module != "" {
+				out = append(out, f.Module)
+			}
+		}
+		if ls.ORM != nil && ls.ORM.Module != "" {
+			out = append(out, ls.ORM.Module)
+		}
+		out = append(out, ls.AllowedModules...)
+	}
+	return out
+}
+
+// Databases returns the system database and every tier-local database.
+func (s *Spec) Databases() []*Database {
+	var out []*Database
+	if s.System.Database != nil {
+		out = append(out, s.System.Database)
+	}
+	for _, t := range s.EffectiveTiers() {
+		if t.Database != nil {
+			out = append(out, t.Database)
+		}
+	}
+	return out
+}
+
+// Entity returns the entity with the given name from any database, or nil.
+func (s *Spec) Entity(name string) *Entity {
+	for _, db := range s.Databases() {
+		for i := range db.Entities {
+			if db.Entities[i].Name == name {
+				return &db.Entities[i]
+			}
 		}
 	}
 	return nil
@@ -380,21 +561,7 @@ func (s *Spec) ResolveSurfaces(refs []string) ([]SurfaceRef, []error) {
 	return out, errs
 }
 
-// AllowedImports lists the import-path prefixes generated code may use beyond
-// the standard library: the system's own module, every framework and ORM
-// module, and the explicit allowlist.
+// AllowedImports is Tier.AllowedImports for the first tier.
 func (s *Spec) AllowedImports() []string {
-	out := []string{s.System.ModulePath}
-	if ls := s.LanguageStack(); ls != nil {
-		for _, f := range ls.Frameworks {
-			if f.Module != "" {
-				out = append(out, f.Module)
-			}
-		}
-		if ls.ORM != nil && ls.ORM.Module != "" {
-			out = append(out, ls.ORM.Module)
-		}
-		out = append(out, ls.AllowedModules...)
-	}
-	return out
+	return s.EffectiveTiers()[0].AllowedImports()
 }

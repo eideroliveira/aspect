@@ -56,7 +56,7 @@ modules:
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if err := swiftSync(root, s, []string{"ledger", "stock"}); err != nil {
+	if err := swiftSync(root, s, s.EffectiveTiers()[0], []string{"ledger", "stock"}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(root, "Package.swift"))

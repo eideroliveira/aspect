@@ -222,3 +222,116 @@ func TestRunFeedsDisallowedImportsBackToCoder(t *testing.T) {
 		t.Fatal("the repair prompt must carry the import violation")
 	}
 }
+
+const twoTierSpec = `
+aspect: 1
+system:
+  name: shop
+  intent: sell
+  topology: api_backend
+  goals:
+    - {id: G1, statement: the app can read the count, verify: test}
+  interfaces:
+    - name: api
+      kind: http
+      intent: what the app calls
+      provider: backend
+      surfaces: [{name: count, route: /count, method: GET}]
+tiers:
+  - name: backend
+    intent: serve
+    language: go
+    module_path: example.com/shop
+    modules:
+      - name: counter
+        intent: count
+        goals: [G1]
+        surfaces: [api.count]
+        scenarios: [{id: S1, when: GET /count, then: "0"}]
+  - name: mobile
+    intent: app
+    language: swift
+    module_path: com.example.shop
+    depends_on: [backend]
+    modules:
+      - name: client
+        intent: read the count
+        goals: [G1]
+        consumes: [api.count]
+        scenarios: [{id: S1, when: parse, then: int}]
+`
+
+func TestRunTwoTiersEachInItsOwnWorkspace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("invokes the go and swift toolchains")
+	}
+	if _, err := exec.LookPath("swift"); err != nil {
+		t.Skip("swift toolchain not installed")
+	}
+	s, err := spec.Parse([]byte(twoTierSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := spec.Validate(s); issues.HasErrors() {
+		t.Fatal(issues)
+	}
+	p, err := plan.Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goCode := agents.CodeOutput{Files: []workspace.File{{Path: "counter/counter.go", Content: "package counter\n\nimport \"net/http\"\n\n// Handler serves the count.\nfunc Handler() http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(\"0\")) })\n}\n"}}, Concerns: []string{}}
+	goTests := agents.TestOutput{Files: []workspace.File{{Path: "counter/counter_test.go", Content: "package counter\n\nimport (\n\t\"net/http/httptest\"\n\t\"testing\"\n)\n\nfunc TestCount_S1(t *testing.T) {\n\trec := httptest.NewRecorder()\n\tHandler().ServeHTTP(rec, httptest.NewRequest(\"GET\", \"/count\", nil))\n\tif rec.Body.String() != \"0\" {\n\t\tt.Fatal(rec.Body.String())\n\t}\n}\n"}}, Coverage: []agents.ScenarioCoverage{}, Concerns: []string{}}
+	verdict := func(module string) agents.Verdict {
+		return agents.Verdict{Module: module, Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "test", Gaps: []string{}, Confidence: 0.9}}, IntentStatus: agents.Aligned, Scenarios: []agents.ScenarioVerdict{}, Recommendations: []string{}}
+	}
+	swiftCode := agents.CodeOutput{Files: []workspace.File{{Path: "Sources/Client/Client.swift", Content: "public enum Client {\n    public static func parse(_ body: String) -> Int? { Int(body) }\n}\n"}}, Concerns: []string{}}
+	swiftTests := agents.TestOutput{Files: []workspace.File{{Path: "Tests/ClientTests/ClientTests.swift", Content: "import XCTest\n@testable import Client\n\nfinal class ClientTests: XCTestCase {\n    func testParse_S1() { XCTAssertEqual(Client.parse(\"0\"), 0) }\n}\n"}}, Coverage: []agents.ScenarioCoverage{}, Concerns: []string{}}
+
+	fake := &scriptedLLM{answers: []string{
+		mustJSON(t, goCode), mustJSON(t, goTests), mustJSON(t, verdict("counter")),
+		mustJSON(t, swiftCode), mustJSON(t, swiftTests), mustJSON(t, verdict("client")),
+	}}
+	out := t.TempDir()
+	rep, err := New(fake, Options{OutDir: out, MaxRepairs: 1, Model: "fake"}).Run(context.Background(), s, p)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, dumpOutputs(rep))
+	}
+	if len(rep.Tiers) != 2 || rep.Tiers[0].Name != "backend" || rep.Tiers[1].Name != "mobile" {
+		t.Fatalf("tiers = %+v", rep.Tiers)
+	}
+	for _, m := range rep.Modules {
+		if !m.TestsOK {
+			t.Fatalf("module %s (tier %s) failed:\n%s", m.Module, m.Tier, m.TestOutput)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "shop", "backend", "go.mod")); err != nil {
+		t.Fatal("backend tier must have its own go.mod")
+	}
+	if _, err := os.Stat(filepath.Join(out, "shop", "mobile", "Package.swift")); err != nil {
+		t.Fatal("mobile tier must have its own Package.swift")
+	}
+	if !strings.Contains(fake.prompts[3], "Surfaces this module consumes") || !strings.Contains(fake.prompts[3], "route: /count") {
+		t.Fatal("the swift client's coder prompt must carry the consumed api surface")
+	}
+	if !strings.Contains(fake.prompts[3], "This tier\n\nLanguage: Swift\nModule path: com.example.shop") {
+		t.Fatal("the swift client's coder prompt must describe its own tier")
+	}
+	if err := rep.Write(out); err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(filepath.Join(out, "shop", "REPORT.md"))
+	if !strings.Contains(string(md), "## Tiers") || !strings.Contains(string(md), "(tier mobile)") {
+		t.Fatalf("report must show tiers:\n%s", md)
+	}
+}
+
+func dumpOutputs(rep *Report) string {
+	if rep == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range rep.Modules {
+		b.WriteString(m.Module + ": " + m.Error + "\n" + m.TestOutput + "\n")
+	}
+	return b.String()
+}

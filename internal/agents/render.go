@@ -20,12 +20,27 @@ import (
 
 // Task is the part of the input every agent shares.
 type Task struct {
-	Spec   *spec.Spec
+	Spec *spec.Spec
+	// Tier the module belongs to (the implicit tier for single-tier specs).
+	Tier   *spec.Tier
 	Module *spec.Module
 	Lang   *lang.Profile
 }
 
 func (t Task) system() spec.System { return t.Spec.System }
+
+// tier returns the task's tier, resolving it from the module when unset.
+func (t Task) tier() *spec.Tier {
+	if t.Tier != nil {
+		return t.Tier
+	}
+	if tier := t.Spec.TierOf(t.Module.Name); tier != nil {
+		return tier
+	}
+	return t.Spec.EffectiveTiers()[0]
+}
+
+func (t Task) modulePath() string { return t.tier().ModulePath }
 
 // renderYAML gives the model the spec fragment exactly as the author wrote it.
 // YAML is more compact than JSON and matches the file the user is editing, so
@@ -55,21 +70,40 @@ func renderFiles(title string, files []workspace.File) string {
 // interfaces in outline. Module-level detail is rendered by renderModule.
 func renderContext(t Task) string {
 	s := t.system()
+	tier := t.tier()
 	var b strings.Builder
 	view := struct {
-		Name        string      `yaml:"name"`
-		Intent      string      `yaml:"intent"`
-		Language    string      `yaml:"language"`
-		ModulePath  string      `yaml:"module_path"`
-		Goals       []spec.Goal `yaml:"goals"`
-		Constraints []string    `yaml:"constraints,omitempty"`
-	}{s.Name, s.Intent, s.Language, s.ModulePath, s.Goals, s.Constraints}
+		Name        string        `yaml:"name"`
+		Intent      string        `yaml:"intent"`
+		Topology    spec.Topology `yaml:"topology"`
+		Goals       []spec.Goal   `yaml:"goals"`
+		Constraints []string      `yaml:"constraints,omitempty"`
+	}{s.Name, s.Intent, t.Spec.EffectiveTopology(), s.Goals, s.Constraints}
 	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderYAML(view))
 
-	if ls := t.Spec.LanguageStack(); ls != nil {
+	if len(t.Spec.Tiers) > 0 {
+		type tierView struct {
+			Name      string   `yaml:"name"`
+			Intent    string   `yaml:"intent"`
+			Language  string   `yaml:"language"`
+			DependsOn []string `yaml:"depends_on,omitempty"`
+			Modules   []string `yaml:"modules"`
+		}
+		var views []tierView
+		for _, tr := range t.Spec.Tiers {
+			v := tierView{tr.Name, tr.Intent, tr.Language, tr.DependsOn, nil}
+			for _, m := range tr.Modules {
+				v.Modules = append(v.Modules, m.Name)
+			}
+			views = append(views, v)
+		}
+		fmt.Fprintf(&b, "# Tiers (this module is in tier %q)\n\nTiers are separate deployables in their own languages; they talk only through interfaces.\n\n```yaml\n%s```\n\n", tier.Name, renderYAML(views))
+	}
+	fmt.Fprintf(&b, "# This tier\n\nLanguage: %s\nModule path: %s\n\n", t.Lang.DisplayName, tier.ModulePath)
+	if ls := tier.LanguageStack(); ls != nil {
 		fmt.Fprintf(&b, "# Stack (%s)\n\n```yaml\n%s```\n\n", t.Lang.DisplayName, renderYAML(ls))
 	}
-	if db := s.Database; db != nil {
+	renderDB := func(title string, db *spec.Database, owner string) {
 		type outline struct {
 			Name   string `yaml:"name"`
 			Intent string `yaml:"intent,omitempty"`
@@ -80,29 +114,42 @@ func renderContext(t Task) string {
 		}
 		view := struct {
 			Engine     string      `yaml:"engine"`
+			Owner      string      `yaml:"owner,omitempty"`
 			Migrations string      `yaml:"migrations"`
 			Test       spec.DBTest `yaml:"test"`
 			Entities   []outline   `yaml:"entities"`
-		}{db.Engine, db.Migrations, db.Test, ents}
-		fmt.Fprintf(&b, "# Database (outline; owned entities are detailed below)\n\n```yaml\n%s```\n\n", renderYAML(view))
+		}{db.Engine, owner, db.Migrations, db.Test, ents}
+		fmt.Fprintf(&b, "# %s (outline; owned entities are detailed below)\n\n```yaml\n%s```\n\n", title, renderYAML(view))
+	}
+	if db := s.Database; db != nil {
+		owner := db.Tier
+		if owner == spec.External {
+			owner = "external (a hosted service; this spec generates no code for it)"
+		}
+		renderDB("System database", db, owner)
+	}
+	if tier.Database != nil {
+		renderDB("Local database of tier "+tier.Name, tier.Database, tier.Name)
 	}
 	if len(s.Interfaces) > 0 {
 		type outline struct {
 			Name      string   `yaml:"name"`
 			Kind      string   `yaml:"kind"`
 			Intent    string   `yaml:"intent"`
+			Provider  string   `yaml:"provider,omitempty"`
+			Service   string   `yaml:"service,omitempty"`
 			Framework string   `yaml:"framework,omitempty"`
 			Surfaces  []string `yaml:"surfaces"`
 		}
 		var ifs []outline
 		for _, i := range s.Interfaces {
-			o := outline{i.Name, i.Kind, i.Intent, i.Framework, nil}
+			o := outline{i.Name, i.Kind, i.Intent, i.Provider, i.Service, i.Framework, nil}
 			for _, sf := range i.Surfaces {
 				o.Surfaces = append(o.Surfaces, sf.Name)
 			}
 			ifs = append(ifs, o)
 		}
-		fmt.Fprintf(&b, "# Interfaces (outline; surfaces this module implements are detailed below)\n\n```yaml\n%s```\n\n", renderYAML(ifs))
+		fmt.Fprintf(&b, "# Interfaces (outline; surfaces this module implements or consumes are detailed below)\n\n```yaml\n%s```\n\n", renderYAML(ifs))
 	}
 	return b.String()
 }
@@ -114,7 +161,7 @@ func renderModule(t Task, heading string) string {
 	m := t.Module
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\nModule: %s\nImport path: %s/%s\nCode directory: %s\nTest directory: %s\n\n```yaml\n%s```\n\n",
-		heading, m.Name, t.system().ModulePath, m.Name, t.Lang.CodeDir(m.Name), t.Lang.TestDir(m.Name), renderYAML(m))
+		heading, m.Name, t.modulePath(), m.Name, t.Lang.CodeDir(m.Name), t.Lang.TestDir(m.Name), renderYAML(m))
 
 	if len(m.Entities) > 0 {
 		var ents []spec.Entity
@@ -125,31 +172,39 @@ func renderModule(t Task, heading string) string {
 		}
 		fmt.Fprintf(&b, "## Entities owned by this module\n\nThis module defines these persistent types and is the only writer of them.\n\n```yaml\n%s```\n\n", renderYAML(ents))
 	}
-	refs, _ := t.Spec.ResolveSurfaces(m.Surfaces)
-	if len(refs) > 0 {
-		type surfaceView struct {
-			Interface string       `yaml:"interface"`
-			Kind      string       `yaml:"kind"`
-			Framework string       `yaml:"framework,omitempty"`
-			Auth      string       `yaml:"interface_auth,omitempty"`
-			Surface   spec.Surface `yaml:"surface"`
-		}
+	type surfaceView struct {
+		Interface string       `yaml:"interface"`
+		Kind      string       `yaml:"kind"`
+		Provider  string       `yaml:"provider,omitempty"`
+		Service   string       `yaml:"service,omitempty"`
+		Framework string       `yaml:"framework,omitempty"`
+		Auth      string       `yaml:"interface_auth,omitempty"`
+		Surface   spec.Surface `yaml:"surface"`
+	}
+	if refs, _ := t.Spec.ResolveSurfaces(m.Surfaces); len(refs) > 0 {
 		var views []surfaceView
 		frameworks := map[string]bool{}
 		for _, r := range refs {
-			views = append(views, surfaceView{r.Interface.Name, r.Interface.Kind, r.Interface.Framework, r.Interface.Auth, *r.Surface})
+			views = append(views, surfaceView{r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, r.Interface.Framework, r.Interface.Auth, *r.Surface})
 			if r.Interface.Framework != "" {
 				frameworks[r.Interface.Framework] = true
 			}
 		}
 		fmt.Fprintf(&b, "## Surfaces this module implements\n\n```yaml\n%s```\n\n", renderYAML(views))
-		if ls := t.Spec.LanguageStack(); ls != nil {
+		if ls := t.tier().LanguageStack(); ls != nil {
 			for _, f := range ls.Frameworks {
 				if frameworks[f.Name] && f.Guidance != "" {
 					fmt.Fprintf(&b, "### How to use %s here\n\n%s\n\n", f.Name, strings.TrimSpace(f.Guidance))
 				}
 			}
 		}
+	}
+	if refs, _ := t.Spec.ResolveSurfaces(m.Consumes); len(refs) > 0 {
+		var views []surfaceView
+		for _, r := range refs {
+			views = append(views, surfaceView{r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, "", r.Interface.Auth, *r.Surface})
+		}
+		fmt.Fprintf(&b, "## Surfaces this module consumes\n\nThis module is a client of these surfaces. They are served by another tier or by an external service, never by code in this tier: implement a client against the contract below, take the base address from configuration, and represent every listed error.\n\n```yaml\n%s```\n\n", renderYAML(views))
 	}
 	return b.String()
 }

@@ -20,7 +20,7 @@ func init() {
 		TestDir:     func(m string) string { return m + "/" },
 		IsTestFile:  func(p string) bool { return strings.HasSuffix(p, "_test.go") },
 		Init:        goInit,
-		Sync:        func(string, *spec.Spec, []string) error { return nil },
+		Sync:        func(string, *spec.Spec, *spec.Tier, []string) error { return nil },
 		Steps: func(module string) [][]string {
 			pattern := "./" + module + "/..."
 			return [][]string{
@@ -43,19 +43,19 @@ func init() {
 	})
 }
 
-func goInit(root string, s *spec.Spec) error {
+func goInit(root string, _ *spec.Spec, t *spec.Tier) error {
 	gomod := filepath.Join(root, "go.mod")
 	if _, err := os.Stat(gomod); err == nil {
 		return nil
 	}
 	version := runtime.Version()
-	if ls := s.LanguageStack(); ls != nil && ls.Version != "" {
+	if ls := t.LanguageStack(); ls != nil && ls.Version != "" {
 		version = ls.Version
 	}
 	version = strings.TrimPrefix(version, "go")
 	if i := strings.Index(version, " "); i > 0 {
 		version = version[:i]
 	}
-	content := fmt.Sprintf("module %s\n\ngo %s\n", s.System.ModulePath, version)
+	content := fmt.Sprintf("module %s\n\ngo %s\n", t.ModulePath, version)
 	return os.WriteFile(gomod, []byte(content), 0o644)
 }
