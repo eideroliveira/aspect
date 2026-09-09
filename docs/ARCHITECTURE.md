@@ -90,6 +90,65 @@ Two rules make the report conservative:
   one call is re-served by a fallback model instead of aborting the run.
 - Effort defaults to `high`; `xhigh` is worth trying for large modules.
 
+## Language profiles
+
+`internal/lang` is the only place that knows a language's layout, manifest,
+toolchain commands and idioms. A profile supplies:
+
+- `CodeDir` / `TestDir` / `IsTestFile`, used to filter agent proposals and to
+  collect dependency sources;
+- `Init` / `Sync`, which write the manifest (`go.mod` once; `Package.swift`
+  regenerated from the spec after every module so SwiftPM sees exactly the
+  targets on disk);
+- `Steps`, the build-and-test commands the workspace runs;
+- `CheckImports`, the mechanical allowlist (Go parses import declarations;
+  Swift relies on the manifest, which only declares packages from the stack);
+- `CoderRules` / `TesterRules`, appended to the agents' system prompts.
+
+The agents and the pipeline never branch on the language name.
+
+## Stack, database and interfaces in prompts
+
+The system-level context every agent sees carries the stack for the target
+language, the database in outline (engine, test strategy, entity names and
+intents) and the interfaces in outline. The module section then carries the
+full definitions of the entities the module owns and the surfaces it
+implements, plus the guidance of the frameworks those surfaces use. Keeping
+detail with the owner keeps prompts small and makes drift visible: a module
+that touches an entity it does not own is contradicting what it was shown.
+
+## Importing an existing system
+
+```
+analyze.Go ─▶ inventory (deterministic)
+                 │
+                 ├─▶ Describer × packages ─▶ fragments (cached as JSON)
+                 │
+                 └─▶ Synthesizer (fragments + summary [+ target]) ─▶ synthesis
+                                                                       │
+                          importer.Assemble (deterministic) ◀──────────┘
+                                   │
+                          spec.Validate ─▶ aspect.yaml + warnings
+```
+
+Two modes share the same agents:
+
+- **Mirror** (target language = source): one module per package, dependency
+  edges from the import graph, entities from the fragments (owner = the
+  package that defines the struct), surfaces merged into interfaces by
+  canonical name (`api`, `web`, `admin`, `cli`, `grpc`). The Synthesizer
+  contributes only the system level: intent, goals mapped to modules, stack,
+  interface metadata.
+- **Retarget** (for example Go to Swift): the Synthesizer designs the module
+  list for the target platform from the fragments, with web and admin
+  surfaces becoming `app` screens and the backend API becoming an `http`
+  interface with `role: consumer`. The assembler sanitises identifiers and
+  validates; it does not redesign.
+
+The inventory is the only language-specific part of the importer. Adding a
+source language means adding an analyser that produces the same `Package`
+shape.
+
 ## Trust boundaries
 
 Generated code is executed (`go test -race`) on the machine running Aspect.

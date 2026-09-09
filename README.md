@@ -33,12 +33,22 @@ A spec is a YAML document with three layers:
 | **System** | name, intent, goals (each with a verification method), global constraints | every agent |
 | **Module** | intent, owned goals, dependencies, interface (signatures with pre/post conditions), invariants, Given/When/Then scenarios | Coder, Tester, Validator |
 | **Goal** | one outcome with `verify: test`, `invariant` or `review` | Validator's verdict |
+| **Stack** | per-language frameworks (e.g. qor5 for a Go admin), ORM, import allowlist, usage guidance | Coder, Tester, Validator; the pipeline enforces the allowlist |
+| **Database** | engine, migration policy, test database, entities with fields and relations | modules that own entities |
+| **Interfaces** | http, web, cli or grpc surfaces bound to entities and a framework | modules that implement surfaces |
 
 Goals are the contract. Every goal must be owned by at least one module or
-scenario, or validation refuses the spec: an unowned goal could never be
-judged. See [docs/SPEC.md](docs/SPEC.md) for the full format and
+scenario, every entity by exactly one module, every surface implemented by
+exactly one module, or validation refuses the spec: an orphan could never be
+judged. See [docs/SPEC.md](docs/SPEC.md) for the full format,
 [examples/inventory/aspect.yaml](examples/inventory/aspect.yaml) for a
-complete spec.
+minimal spec and
+[examples/warehouse_admin/aspect.yaml](examples/warehouse_admin/aspect.yaml)
+for one with a Postgres data model, a qor5 admin and an HTTP API.
+
+Specs are language-agnostic. `system.language` picks a profile (`go` or
+`swift` today) that decides layout, manifest and toolchain, so the same spec
+can be built as a Go service and as a SwiftPM package for iOS.
 
 ## The agents
 
@@ -74,26 +84,66 @@ Flags: `-model` (default `claude-opus-5`, or `$ASPECT_MODEL`), `-effort`
 (`low`…`max`), `-max-repairs` (default 3), `-fallbacks=false` to disable
 server-side refusal fallbacks.
 
+## Importing an existing system
+
+Aspect can recover a spec from an existing Go codebase, and re-express it
+for another platform:
+
+```sh
+aspect inventory ~/src/shop -exclude external            # deterministic, no model calls
+aspect import    ~/src/shop -o shop.yaml                  # same language: one module per package
+aspect import    ~/src/shop -o shop-ios.yaml -language swift \
+                 -hint "an iOS app for members; the admin stays on the web"
+aspect run shop-ios.yaml -out ./out                       # build the SwiftPM package
+```
+
+Import runs in three stages. The **inventory** is deterministic: packages,
+exported API, persistent structs (from ORM tags), routes, tests and the
+dependency graph, from the parser alone. The **Describer** reads one package
+at a time and writes its fragment: intent, candidate goals, entities,
+surfaces, language-neutral operations, invariants and scenarios derived from
+the tests. The **Synthesizer** consolidates fragments into system goals, the
+stack and the interfaces; in retarget mode (target language differs) it also
+designs the module list for the target, turning web pages into app screens
+and keeping the backend API as an interface the app consumes.
+
+Assembly is deterministic again, records provenance under `system.source`,
+and never fails: whatever it cannot reconcile becomes a warning at the top of
+the YAML. Fragments are cached under `.aspect-cache/`, so an interrupted or
+re-run import only pays for packages not yet described. Review the recovered
+intents and goals before running the pipeline: they are the model's reading
+of the code, not the owner's statement of it.
+
 ## Status
 
 Early. What exists today:
 
-- Spec format v1, loader, and a validator that reports every problem at once
-  (identifiers, references, dependency cycles, goal coverage).
+- Spec format v1 with stack, database and interface sections; a validator
+  that reports every problem at once (identifiers, references, dependency
+  cycles, goal, entity and surface ownership).
+- Language profiles for Go and Swift (SwiftPM, iOS + macOS platforms).
+- A mechanical import allowlist for Go: generated code that imports anything
+  outside the spec's stack is rejected and fed back to the Coder.
 - Deterministic planner.
 - Coder, Tester and Validator agents on the Anthropic API with structured
   JSON outputs, prompt caching, streaming, and refusal fallbacks.
-- Workspace runner: `go mod tidy`, `go vet`, `go test -race` with a timeout.
+- Workspace runner per language with a timeout.
 - Repair loop and per-module, per-goal report.
-- Tests run offline against fake clients, including an end-to-end pipeline
-  test that exercises a real repair round through the Go toolchain.
+- `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
+  optionally re-expressed for Swift/iOS.
+- Tests run offline against fake clients, including end-to-end pipeline
+  tests that exercise a real repair round through the Go toolchain and a
+  real build through the Swift toolchain.
 
 Planned next:
 
 - Cross-module validation pass once all modules exist (system-level goals).
 - Spec-drift detection: re-run the Validator on an existing codebase against
   an updated spec.
-- More target languages; the spec is language-agnostic, the workspace is not.
+- Importers for other source languages (the Describer and Synthesizer are
+  language-agnostic; only the inventory is Go-specific).
+- A Swift import guard equivalent to the Go one.
+- More target languages: a profile in `internal/lang` is all a language needs.
 - Parallel module generation for independent subgraphs of the plan.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design rationale.

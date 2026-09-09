@@ -28,8 +28,8 @@ func (rep *Report) Write(outDir string) error {
 func (rep *Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Aspect report: %s\n\n", rep.System)
-	fmt.Fprintf(&b, "Model: `%s`  \nStarted: %s  \nDuration: %s  \nLLM calls: %d (in %d / out %d / cached %d tokens)\n\n",
-		rep.Model, rep.Started.Format("2006-01-02 15:04:05"), rep.Finished.Sub(rep.Started).Round(1e9),
+	fmt.Fprintf(&b, "Language: %s  \nModel: `%s`  \nStarted: %s  \nDuration: %s  \nLLM calls: %d (in %d / out %d / cached %d tokens)\n\n",
+		rep.Language, rep.Model, rep.Started.Format("2006-01-02 15:04:05"), rep.Finished.Sub(rep.Started).Round(1e9),
 		rep.Usage.Calls, rep.Usage.InputTokens, rep.Usage.OutputTokens, rep.Usage.CacheReadTokens)
 
 	b.WriteString("## Goals\n\n| Goal | Verify | Status | By module |\n|---|---|---|---|\n")

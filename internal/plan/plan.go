@@ -23,6 +23,9 @@ type Step struct {
 	Scenarios int
 	// Invariants the Tester must probe and the Validator must judge.
 	Invariants int
+	// Entities the module owns and Surfaces it implements.
+	Entities []string
+	Surfaces []string
 }
 
 // Plan is the ordered list of steps.
@@ -69,7 +72,7 @@ func Build(s *spec.Spec) (*Plan, error) {
 		name := ready[0]
 		ready = ready[1:]
 		m := s.Module(name)
-		p.Steps = append(p.Steps, stepFor(m))
+		p.Steps = append(p.Steps, stepFor(s, m))
 		next := append([]string{}, dependents[name]...)
 		sort.Strings(next)
 		for _, d := range next {
@@ -86,7 +89,7 @@ func Build(s *spec.Spec) (*Plan, error) {
 	return p, nil
 }
 
-func stepFor(m *spec.Module) Step {
+func stepFor(s *spec.Spec, m *spec.Module) Step {
 	seen := map[string]bool{}
 	var goals []string
 	addGoal := func(g string) {
@@ -104,11 +107,19 @@ func stepFor(m *spec.Module) Step {
 		}
 	}
 	sort.Strings(goals)
+	var surfaces []string
+	if refs, _ := s.ResolveSurfaces(m.Surfaces); len(refs) > 0 {
+		for _, r := range refs {
+			surfaces = append(surfaces, r.ID())
+		}
+	}
 	return Step{
 		Module:     m.Name,
 		DependsOn:  append([]string{}, m.DependsOn...),
 		Goals:      goals,
 		Scenarios:  len(m.Scenarios),
 		Invariants: len(m.Invariants),
+		Entities:   append([]string{}, m.Entities...),
+		Surfaces:   surfaces,
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/eideroliveira/aspect/internal/llm"
-	"github.com/eideroliveira/aspect/internal/spec"
 	"github.com/eideroliveira/aspect/internal/workspace"
 )
 
@@ -31,8 +30,7 @@ const (
 
 // ValidateInput is the evidence the Validator judges.
 type ValidateInput struct {
-	System spec.System
-	Module spec.Module
+	Task
 	// GoalIDs the module is accountable for.
 	GoalIDs []string
 	Code    []workspace.File
@@ -91,6 +89,7 @@ How to judge:
 - A goal verified by "review" is judged from the code alone; cite the lines that support your conclusion.
 - Check the Tester's coverage claims: open each named test and confirm it does what the scenario says. Mark uncovered scenarios.
 - Intent drift means the code works but solves a different or narrower problem than the stated intent, or leaks responsibilities that belong to another module.
+- For owned entities, check the persistent type matches the declared fields, keys, uniqueness and relations, and that no other write path exists outside this module. For surfaces, check routes, methods, request and response shapes, error cases and auth against the spec, and that the named framework is used the way its guidance says.
 - If the test run failed, no goal verified by test or invariant can be "achieved".
 - Confidence is your honest probability that the status is right. Prefer "partial" with concrete gaps over an optimistic "achieved".
 - Answer with JSON matching the schema you were given. Evidence must reference file names and identifiers, not vague impressions.`
@@ -139,8 +138,8 @@ var verdictSchema = map[string]any{
 // Judge produces the verdict for one module.
 func (v *Validator) Judge(ctx context.Context, in ValidateInput) (Verdict, llm.Response, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderSystem(in.System))
-	fmt.Fprintf(&b, "# Module\n\n```yaml\n%s```\n\n", renderYAML(in.Module))
+	b.WriteString(renderContext(in.Task))
+	b.WriteString(renderModule(in.Task, "Module under judgement"))
 	fmt.Fprintf(&b, "Goals to reach a verdict on: %s\n\n", strings.Join(in.GoalIDs, ", "))
 	b.WriteString(renderFiles("Implementation", in.Code))
 	b.WriteString(renderFiles("Tests", in.Tests))

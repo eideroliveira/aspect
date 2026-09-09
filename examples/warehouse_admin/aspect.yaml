@@ -1,0 +1,205 @@
+# Aspect specification, format version 1.
+# A warehouse back office: persistent catalog, a qor5 admin UI, and a small
+# HTTP API. Exercises the stack, database and interfaces sections.
+aspect: 1
+
+system:
+  name: warehouse_admin
+  intent: >
+    Give warehouse staff one place to maintain the product catalog and see
+    stock, and give the online shop a reliable way to reserve goods, so that
+    nothing is sold that is not on the shelf.
+  language: go
+  module_path: example.com/warehouse
+  goals:
+    - id: G1
+      statement: Products and stock survive restarts and are shared by every interface.
+      verify: test
+    - id: G2
+      statement: Staff can list, create, edit and delete products from the admin UI without writing SQL.
+      verify: test
+    - id: G3
+      statement: A reservation never takes a SKU below zero on hand, even under concurrent requests.
+      verify: invariant
+    - id: G4
+      statement: The admin is built on qor5 presets, not hand-written CRUD pages.
+      verify: review
+  constraints:
+    - Configuration (DSN, listen address) comes from environment variables.
+
+  stack:
+    go:
+      version: "1.26"
+      frameworks:
+        - name: qor5
+          module: github.com/qor5/admin/v3
+          version: v3.0.0
+          purpose: Admin UI with CRUD presets over GORM models.
+          guidance: |
+            Build the admin with presets.New(). Register each entity with
+            b.Model(&Entity{}) and configure listing fields with
+            .Listing("Field", ...) and editing fields with .Editing(...).
+            Mount the admin on the router returned by b; do not write
+            HTML templates by hand. Keep the presets builder in one place
+            so every model is registered through the same function.
+        - name: web
+          module: github.com/qor5/web/v3
+          purpose: The web toolkit qor5 presets are built on.
+      orm:
+        name: gorm
+        module: gorm.io/gorm
+        version: v1.25.0
+      allowed_modules:
+        - gorm.io/driver/
+        - github.com/theplant/
+        - github.com/go-chi/chi/v5
+      guidance: |
+        One GORM *gorm.DB is opened in main and injected; no package-level
+        database variables. Every write goes through the module that owns
+        the entity.
+
+  database:
+    engine: postgres
+    migrations: auto
+    test:
+      engine: sqlite
+      dsn_env: WAREHOUSE_TEST_DSN
+    entities:
+      - name: Product
+        intent: A sellable item identified by its SKU.
+        fields:
+          - {name: ID, type: uint, key: primary}
+          - {name: SKU, type: string, required: true, unique: true}
+          - {name: Name, type: string, required: true}
+          - {name: OnHand, type: int, default: "0", intent: units physically on the shelf}
+          - {name: Reserved, type: int, default: "0", intent: units held for orders}
+        relations:
+          - {kind: has_many, entity: Movement, via: ProductID}
+        constraints:
+          - OnHand >= 0 and Reserved >= 0 and Reserved <= OnHand at all times.
+      - name: Movement
+        intent: One change of a product's stock, kept forever as the audit trail.
+        fields:
+          - {name: ID, type: uint, key: primary}
+          - {name: ProductID, type: uint, required: true}
+          - {name: Qty, type: int, required: true, intent: signed change to OnHand or Reserved}
+          - {name: Kind, type: string, required: true, intent: "receipt, reserve, release or ship"}
+          - {name: Order, type: string, intent: "order reference for reserve, release and ship"}
+          - {name: At, type: time.Time, required: true}
+        relations:
+          - {kind: belongs_to, entity: Product, via: ProductID}
+        constraints:
+          - Rows are never updated or deleted.
+
+  interfaces:
+    - name: admin
+      kind: web
+      intent: Back office for warehouse staff.
+      framework: qor5
+      auth: staff session
+      surfaces:
+        - name: products
+          route: /admin/products
+          entity: Product
+          operations: [list, create, update, delete]
+          intent: Maintain the catalog; OnHand and Reserved are read-only here.
+        - name: movements
+          route: /admin/movements
+          entity: Movement
+          operations: [list]
+          intent: Audit trail, newest first.
+    - name: api
+      kind: http
+      intent: What the online shop calls.
+      auth: bearer token from SHOP_API_TOKEN
+      surfaces:
+        - name: available
+          method: GET
+          route: /api/products/{sku}/available
+          response: '{"sku": string, "available": int}'
+          errors: ["404 when the SKU does not exist"]
+        - name: reserve
+          method: POST
+          route: /api/reservations
+          request: '{"sku": string, "qty": int, "order": string}'
+          response: '{"available": int}'
+          errors: ["404 unknown SKU", "409 when fewer than qty are available", "400 when qty <= 0"]
+
+modules:
+  - name: catalog
+    intent: >
+      Own the Product and Movement tables and every write to them. This is
+      the only module that knows about GORM.
+    goals: [G1, G3]
+    entities: [Product, Movement]
+    interface:
+      - name: Open
+        signature: "func Open(db *gorm.DB) (*Catalog, error)"
+        intent: Migrate the schema and return the catalog.
+      - name: Receive
+        signature: "func (c *Catalog) Receive(ctx context.Context, sku string, qty int) error"
+        pre: ["qty > 0"]
+      - name: Reserve
+        signature: "func (c *Catalog) Reserve(ctx context.Context, sku string, qty int, order string) (available int, err error)"
+        intent: Atomically hold goods; fails with ErrInsufficient when fewer than qty are available.
+        pre: ["qty > 0"]
+      - name: Available
+        signature: "func (c *Catalog) Available(ctx context.Context, sku string) (int, error)"
+    invariants:
+      - For every product, OnHand - Reserved == Available and both OnHand and Reserved are >= 0.
+      - Every successful Receive or Reserve inserts exactly one Movement.
+    scenarios:
+      - id: S1
+        given: a product A with OnHand 5
+        when: Reserve(A, 3, "o1")
+        then: Available(A) == 2 and one Movement of kind reserve exists
+        goals: [G1, G3]
+      - id: S2
+        given: a product A with OnHand 5
+        when: 20 goroutines each Reserve(A, 1, "o")
+        then: exactly 5 succeed, the rest return ErrInsufficient, Available(A) == 0
+        goals: [G3]
+
+  - name: admin
+    intent: >
+      The qor5 back office. It registers the catalog's models with presets
+      and exposes nothing else.
+    goals: [G2, G4]
+    depends_on: [catalog]
+    surfaces: [admin]
+    interface:
+      - name: New
+        signature: "func New(db *gorm.DB) http.Handler"
+        intent: Build the presets admin for Product and Movement.
+    scenarios:
+      - id: S1
+        given: an admin built over a test database with one product
+        when: GET /admin/products
+        then: the response is 200 and contains the product's SKU
+        goals: [G2]
+      - id: S2
+        given: an admin built over a test database
+        when: the Product model is inspected in the presets builder
+        then: OnHand and Reserved are not editable fields
+        goals: [G2]
+
+  - name: api
+    intent: >
+      The JSON API the shop calls. Thin: validates input, calls the catalog,
+      maps errors to status codes.
+    goals: [G3]
+    depends_on: [catalog]
+    surfaces: [api]
+    interface:
+      - name: New
+        signature: "func New(c *catalog.Catalog, token string) http.Handler"
+    scenarios:
+      - id: S1
+        given: product A with OnHand 2
+        when: POST /api/reservations {sku A, qty 3, order o1} with a valid token
+        then: 409 and Available(A) is still 2
+        goals: [G3]
+      - id: S2
+        given: any state
+        when: POST /api/reservations without a token
+        then: 401

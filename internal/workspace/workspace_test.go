@@ -2,15 +2,29 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestNewWritesGoMod(t *testing.T) {
+func goToolchain(modulePath string) Toolchain {
+	return Toolchain{
+		SourceExt: ".go",
+		Protected: []string{"go.mod", "go.sum"},
+		Init: func(root string) error {
+			return os.WriteFile(filepath.Join(root, "go.mod"), []byte(fmt.Sprintf("module %s\n\ngo 1.24\n", modulePath)), 0o644)
+		},
+		Steps: func(module string) [][]string {
+			return [][]string{{"go", "vet", "./" + module + "/..."}, {"go", "test", "-count=1", "./" + module + "/..."}}
+		},
+	}
+}
+
+func TestNewRunsInit(t *testing.T) {
 	root := t.TempDir()
-	w, err := New(filepath.Join(root, "sys"), "example.com/sys")
+	w, err := New(filepath.Join(root, "sys"), goToolchain("example.com/sys"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +38,7 @@ func TestNewWritesGoMod(t *testing.T) {
 }
 
 func TestWriteFilesRejectsEscapes(t *testing.T) {
-	w, err := New(t.TempDir(), "example.com/sys")
+	w, err := New(t.TempDir(), goToolchain("example.com/sys"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +53,7 @@ func TestTestRunsGeneratedModule(t *testing.T) {
 	if testing.Short() {
 		t.Skip("invokes the go toolchain")
 	}
-	w, err := New(t.TempDir(), "example.com/sys")
+	w, err := New(t.TempDir(), goToolchain("example.com/sys"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +64,7 @@ func TestTestRunsGeneratedModule(t *testing.T) {
 	if err := w.WriteFiles(files); err != nil {
 		t.Fatal(err)
 	}
-	res, err := w.Test(context.Background(), "./...")
+	res, err := w.Test(context.Background(), "add")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +77,7 @@ func TestTestRunsGeneratedModule(t *testing.T) {
 	if err := w.WriteFiles(files[1:]); err != nil {
 		t.Fatal(err)
 	}
-	res, err = w.Test(context.Background(), "./...")
+	res, err = w.Test(context.Background(), "add")
 	if err != nil {
 		t.Fatal(err)
 	}
