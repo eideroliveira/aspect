@@ -1,0 +1,28 @@
+# The smallest useful Aspect spec: one tier, one module, one goal.
+aspect: 1
+
+system:
+  name: greeter
+  intent: Greet people by name so that every reply feels personal.
+  language: go
+  module_path: example.com/greeter
+  goals:
+    - id: G1
+      statement: A greeting always contains the name it was asked for.
+      verify: test
+
+modules:
+  - name: greet
+    intent: Build the greeting text.
+    goals: [G1]
+    interface:
+      - name: Greet
+        signature: "Greet(name: string) -> string"
+        pre: ["name is not empty"]
+        post: ["result contains name"]
+    scenarios:
+      - id: S1
+        given: nothing
+        when: Greet("Ana")
+        then: the result contains "Ana"
+        goals: [G1]
