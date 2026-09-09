@@ -6,14 +6,12 @@ import (
 	"strings"
 
 	"github.com/eideroliveira/aspect/internal/llm"
-	"github.com/eideroliveira/aspect/internal/spec"
 	"github.com/eideroliveira/aspect/internal/workspace"
 )
 
 // CodeInput is everything the Coder may know about one module.
 type CodeInput struct {
-	System spec.System
-	Module spec.Module
+	Task
 	// Dependencies is the source of modules this one depends on, so the Coder
 	// codes against real signatures instead of guessing.
 	Dependencies []workspace.File
@@ -44,14 +42,14 @@ type Coder struct {
 
 const coderSystem = `You are the Coder agent in Aspect, a pipeline that builds software from a formal specification.
 
-You implement exactly one module at a time, in Go. The specification is the source of truth: implement the stated interface with the stated intent, honour every invariant and constraint, and make each pre/post condition true. Where the spec is silent, choose the simplest design that keeps the module's intent obvious to a reader.
+You implement exactly one module at a time. The specification is the source of truth: implement the stated interface with the stated intent, honour every invariant and constraint, and make each pre/post condition true. Where the spec is silent, choose the simplest design that keeps the module's intent obvious to a reader.
+
+When the module owns database entities, it defines their persistent types, their schema or migrations, and every write path; other modules read through this module's interface. When the module implements interface surfaces (HTTP endpoints, web pages, commands), it wires them exactly as specified, using the framework the spec names and following the framework guidance.
 
 Rules:
 - Produce complete, compilable files. Never elide code with comments like "rest unchanged".
-- Put the module in the directory named after it, as a package with that name (module "stock" lives in stock/ as package stock).
-- Only write files inside the module's own directory. Never write tests (files ending in _test.go); the Tester agent owns those.
-- Import dependency modules by their real import path shown in the dependencies section. Do not re-implement them.
-- Standard library only unless the spec's constraints allow otherwise.
+- Only write implementation files inside the module's code directory. Never write tests; the Tester agent owns those.
+- Use only the libraries the stack section allows. The pipeline checks imports mechanically.
 - On a repair round you receive failing build or test output. Fix the implementation. If you are convinced a test contradicts the spec, keep the implementation faithful to the spec and say so in concerns.
 - Answer with JSON matching the schema you were given.`
 
@@ -69,10 +67,9 @@ var codeSchema = map[string]any{
 // Generate produces or repairs the module's implementation.
 func (c *Coder) Generate(ctx context.Context, in CodeInput) (CodeOutput, llm.Response, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderSystem(in.System))
-	fmt.Fprintf(&b, "# Module to implement\n\nImport path: %s/%s\n\n```yaml\n%s```\n\n",
-		in.System.ModulePath, in.Module.Name, renderYAML(in.Module))
-	b.WriteString(renderFiles("Dependencies (already implemented, import by path)", in.Dependencies))
+	b.WriteString(renderContext(in.Task))
+	b.WriteString(renderModule(in.Task, "Module to implement"))
+	b.WriteString(renderFiles("Dependencies (already implemented, import them)", in.Dependencies))
 	if in.Feedback != "" {
 		b.WriteString(renderFiles("Current implementation", in.Existing))
 		b.WriteString(renderFiles("Current tests (read-only)", in.Tests))
@@ -83,31 +80,14 @@ func (c *Coder) Generate(ctx context.Context, in CodeInput) (CodeOutput, llm.Res
 	}
 
 	var out CodeOutput
-	resp, err := complete(ctx, c.LLM, coderSystem, b.String(), codeSchema, &out)
+	system := coderSystem + "\n\n" + in.Lang.CoderRules
+	resp, err := complete(ctx, c.LLM, system, b.String(), codeSchema, &out)
 	if err != nil {
 		return out, resp, fmt.Errorf("coder: %w", err)
 	}
-	out.Files = keepModuleFiles(in.Module.Name, out.Files, false)
+	out.Files = in.Lang.KeepModuleFiles(in.Module.Name, out.Files, false)
 	if len(out.Files) == 0 {
-		return out, resp, fmt.Errorf("coder: returned no files inside %s/", in.Module.Name)
+		return out, resp, fmt.Errorf("coder: returned no implementation files inside %s", in.Lang.CodeDir(in.Module.Name))
 	}
 	return out, resp, nil
-}
-
-// keepModuleFiles drops anything an agent proposed outside its module
-// directory, and test files unless wantTests is set (or non-test files when it
-// is). Agents are trusted to write code, not to reach across modules.
-func keepModuleFiles(module string, files []workspace.File, wantTests bool) []workspace.File {
-	prefix := module + "/"
-	var kept []workspace.File
-	for _, f := range files {
-		p := strings.TrimPrefix(f.Path, "./")
-		isTest := strings.HasSuffix(p, "_test.go")
-		if !strings.HasPrefix(p, prefix) || !strings.HasSuffix(p, ".go") || isTest != wantTests {
-			continue
-		}
-		f.Path = p
-		kept = append(kept, f)
-	}
-	return kept
 }

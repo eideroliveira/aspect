@@ -90,6 +90,33 @@ Two rules make the report conservative:
   one call is re-served by a fallback model instead of aborting the run.
 - Effort defaults to `high`; `xhigh` is worth trying for large modules.
 
+## Language profiles
+
+`internal/lang` is the only place that knows a language's layout, manifest,
+toolchain commands and idioms. A profile supplies:
+
+- `CodeDir` / `TestDir` / `IsTestFile`, used to filter agent proposals and to
+  collect dependency sources;
+- `Init` / `Sync`, which write the manifest (`go.mod` once; `Package.swift`
+  regenerated from the spec after every module so SwiftPM sees exactly the
+  targets on disk);
+- `Steps`, the build-and-test commands the workspace runs;
+- `CheckImports`, the mechanical allowlist (Go parses import declarations;
+  Swift relies on the manifest, which only declares packages from the stack);
+- `CoderRules` / `TesterRules`, appended to the agents' system prompts.
+
+The agents and the pipeline never branch on the language name.
+
+## Stack, database and interfaces in prompts
+
+The system-level context every agent sees carries the stack for the target
+language, the database in outline (engine, test strategy, entity names and
+intents) and the interfaces in outline. The module section then carries the
+full definitions of the entities the module owns and the surfaces it
+implements, plus the guidance of the frameworks those surfaces use. Keeping
+detail with the owner keeps prompts small and makes drift visible: a module
+that touches an entity it does not own is contradicting what it was shown.
+
 ## Trust boundaries
 
 Generated code is executed (`go test -race`) on the machine running Aspect.

@@ -33,12 +33,22 @@ A spec is a YAML document with three layers:
 | **System** | name, intent, goals (each with a verification method), global constraints | every agent |
 | **Module** | intent, owned goals, dependencies, interface (signatures with pre/post conditions), invariants, Given/When/Then scenarios | Coder, Tester, Validator |
 | **Goal** | one outcome with `verify: test`, `invariant` or `review` | Validator's verdict |
+| **Stack** | per-language frameworks (e.g. qor5 for a Go admin), ORM, import allowlist, usage guidance | Coder, Tester, Validator; the pipeline enforces the allowlist |
+| **Database** | engine, migration policy, test database, entities with fields and relations | modules that own entities |
+| **Interfaces** | http, web, cli or grpc surfaces bound to entities and a framework | modules that implement surfaces |
 
 Goals are the contract. Every goal must be owned by at least one module or
-scenario, or validation refuses the spec: an unowned goal could never be
-judged. See [docs/SPEC.md](docs/SPEC.md) for the full format and
+scenario, every entity by exactly one module, every surface implemented by
+exactly one module, or validation refuses the spec: an orphan could never be
+judged. See [docs/SPEC.md](docs/SPEC.md) for the full format,
 [examples/inventory/aspect.yaml](examples/inventory/aspect.yaml) for a
-complete spec.
+minimal spec and
+[examples/warehouse_admin/aspect.yaml](examples/warehouse_admin/aspect.yaml)
+for one with a Postgres data model, a qor5 admin and an HTTP API.
+
+Specs are language-agnostic. `system.language` picks a profile (`go` or
+`swift` today) that decides layout, manifest and toolchain, so the same spec
+can be built as a Go service and as a SwiftPM package for iOS.
 
 ## The agents
 
@@ -78,22 +88,27 @@ server-side refusal fallbacks.
 
 Early. What exists today:
 
-- Spec format v1, loader, and a validator that reports every problem at once
-  (identifiers, references, dependency cycles, goal coverage).
+- Spec format v1 with stack, database and interface sections; a validator
+  that reports every problem at once (identifiers, references, dependency
+  cycles, goal, entity and surface ownership).
+- Language profiles for Go and Swift (SwiftPM, iOS + macOS platforms).
+- A mechanical import allowlist for Go: generated code that imports anything
+  outside the spec's stack is rejected and fed back to the Coder.
 - Deterministic planner.
 - Coder, Tester and Validator agents on the Anthropic API with structured
   JSON outputs, prompt caching, streaming, and refusal fallbacks.
-- Workspace runner: `go mod tidy`, `go vet`, `go test -race` with a timeout.
+- Workspace runner per language with a timeout.
 - Repair loop and per-module, per-goal report.
-- Tests run offline against fake clients, including an end-to-end pipeline
-  test that exercises a real repair round through the Go toolchain.
+- Tests run offline against fake clients, including end-to-end pipeline
+  tests that exercise a real repair round through the Go toolchain and a
+  real build through the Swift toolchain.
 
 Planned next:
 
 - Cross-module validation pass once all modules exist (system-level goals).
 - Spec-drift detection: re-run the Validator on an existing codebase against
   an updated spec.
-- More target languages; the spec is language-agnostic, the workspace is not.
+- More target languages: a profile in `internal/lang` is all a language needs.
 - Parallel module generation for independent subgraphs of the plan.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design rationale.

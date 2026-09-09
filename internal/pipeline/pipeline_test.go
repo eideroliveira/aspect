@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,5 +141,84 @@ func TestRunReportsFailedModuleAsUnverifiable(t *testing.T) {
 	}
 	if rep.Modules[0].Error == "" || rep.Goals[0].Status != agents.Unverifiable {
 		t.Fatalf("report = %+v", rep)
+	}
+}
+
+const swiftCounterSpec = `
+aspect: 1
+system:
+  name: counter
+  intent: count events
+  language: swift
+  module_path: com.example.counter
+  goals:
+    - {id: G1, statement: the count never decreases, verify: invariant}
+modules:
+  - name: counter
+    intent: hold a monotonically increasing count
+    goals: [G1]
+    scenarios:
+      - {id: S1, given: a new counter, when: increment twice, then: the result is 2, goals: [G1]}
+`
+
+func TestRunSwiftModuleThroughRealToolchain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("invokes the swift toolchain")
+	}
+	if _, err := exec.LookPath("swift"); err != nil {
+		t.Skip("swift toolchain not installed")
+	}
+	s, err := spec.Parse([]byte(swiftCounterSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := spec.Validate(s); issues.HasErrors() {
+		t.Fatal(issues)
+	}
+	p, _ := plan.Build(s)
+
+	code := agents.CodeOutput{Files: []workspace.File{{Path: "Sources/Counter/Counter.swift",
+		Content: "public struct Counter {\n    public private(set) var value = 0\n    public init() {}\n    public mutating func increment() -> Int { value += 1; return value }\n}\n"}}, Notes: "n", Concerns: []string{}}
+	tests := agents.TestOutput{Files: []workspace.File{{Path: "Tests/CounterTests/CounterTests.swift",
+		Content: "import XCTest\n@testable import Counter\n\nfinal class CounterTests: XCTestCase {\n    func testIncrement_S1() {\n        var c = Counter()\n        _ = c.increment()\n        XCTAssertEqual(c.increment(), 2)\n    }\n}\n"}},
+		Coverage: []agents.ScenarioCoverage{{Scenario: "S1", Tests: []string{"testIncrement_S1"}}}, Concerns: []string{}}
+	verdict := agents.Verdict{Module: "counter", Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "testIncrement_S1", Gaps: []string{}, Confidence: 0.9}},
+		IntentStatus: agents.Aligned, IntentRationale: "ok", Scenarios: []agents.ScenarioVerdict{}, Recommendations: []string{}}
+
+	fake := &scriptedLLM{answers: []string{mustJSON(t, code), mustJSON(t, tests), mustJSON(t, verdict)}}
+	out := t.TempDir()
+	rep, err := New(fake, Options{OutDir: out, MaxRepairs: 1, Model: "fake"}).Run(context.Background(), s, p)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, rep.Modules[0].TestOutput)
+	}
+	m := rep.Modules[0]
+	if !m.TestsOK || m.Iterations != 1 {
+		t.Fatalf("tests_ok=%v iterations=%d output:\n%s", m.TestsOK, m.Iterations, m.TestOutput)
+	}
+	if _, err := os.Stat(filepath.Join(out, "counter", "Package.swift")); err != nil {
+		t.Fatal("Package.swift was not generated")
+	}
+	if rep.Language != "swift" {
+		t.Fatalf("report language = %q", rep.Language)
+	}
+}
+
+func TestRunFeedsDisallowedImportsBackToCoder(t *testing.T) {
+	s, _ := spec.Parse([]byte(counterSpec))
+	p, _ := plan.Build(s)
+	bad := agents.CodeOutput{Files: []workspace.File{{Path: "counter/counter.go",
+		Content: "package counter\n\nimport _ \"github.com/evil/dep\"\n\ntype Counter struct{ n int }\n\nfunc (c *Counter) Inc() int { c.n++; return c.n }\n"}}, Notes: "n", Concerns: []string{}}
+	tests := agents.TestOutput{Files: []workspace.File{{Path: "counter/counter_test.go", Content: "package counter\n"}}, Coverage: []agents.ScenarioCoverage{}, Concerns: []string{}}
+	fake := &scriptedLLM{answers: []string{mustJSON(t, bad), mustJSON(t, tests), mustJSON(t, bad)}}
+	rep, err := New(fake, Options{OutDir: t.TempDir(), MaxRepairs: 1}).Run(context.Background(), s, p)
+	if err == nil {
+		t.Fatal("run should fail: the validator answer was never scripted")
+	}
+	m := rep.Modules[0]
+	if m.TestsOK || m.Iterations != 2 || !strings.Contains(m.TestOutput, `imports "github.com/evil/dep"`) {
+		t.Fatalf("import violation must be the recorded failure, got ok=%v iterations=%d output=%q", m.TestsOK, m.Iterations, m.TestOutput)
+	}
+	if !strings.Contains(fake.prompts[2], "disallowed imports") {
+		t.Fatal("the repair prompt must carry the import violation")
 	}
 }

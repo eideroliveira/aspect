@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/eideroliveira/aspect/internal/agents"
+	"github.com/eideroliveira/aspect/internal/lang"
 	"github.com/eideroliveira/aspect/internal/llm"
 	"github.com/eideroliveira/aspect/internal/plan"
 	"github.com/eideroliveira/aspect/internal/spec"
@@ -21,7 +22,7 @@ import (
 
 // Options tune a run.
 type Options struct {
-	// OutDir is where the generated module and the report are written.
+	// OutDir is where the generated project and the report are written.
 	OutDir string
 	// MaxRepairs bounds the Coder repair loop per module.
 	MaxRepairs int
@@ -49,6 +50,7 @@ type ModuleReport struct {
 // Report is the outcome of a whole run.
 type Report struct {
 	System   string         `json:"system"`
+	Language string         `json:"language"`
 	Model    string         `json:"model"`
 	Started  time.Time      `json:"started"`
 	Finished time.Time      `json:"finished"`
@@ -95,23 +97,39 @@ func (r *Runner) logf(format string, args ...any) {
 	fmt.Fprintf(r.Opts.Log, format+"\n", args...)
 }
 
+// Toolchain adapts a language profile and a spec to what the workspace needs.
+func Toolchain(p *lang.Profile, s *spec.Spec) workspace.Toolchain {
+	return workspace.Toolchain{
+		SourceExt: p.SourceExt,
+		Protected: []string{"go.mod", "go.sum", "Package.swift", "Package.resolved"},
+		Init:      func(root string) error { return p.Init(root, s) },
+		Sync:      func(root string, mods []string) error { return p.Sync(root, s, mods) },
+		Steps:     p.Steps,
+	}
+}
+
 // Run executes the plan. It keeps going after a module fails so the report
 // shows every module's state; the error returned summarises failures.
 func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, error) {
-	root := filepath.Join(r.Opts.OutDir, s.System.Name)
-	ws, err := workspace.New(root, s.System.ModulePath)
+	profile, err := lang.For(s.System.Language)
 	if err != nil {
 		return nil, err
 	}
-	rep := &Report{System: s.System.Name, Model: r.Opts.Model, Started: time.Now()}
-	var failed []string
+	root := filepath.Join(r.Opts.OutDir, s.System.Name)
+	ws, err := workspace.New(root, Toolchain(profile, s))
+	if err != nil {
+		return nil, err
+	}
+	rep := &Report{System: s.System.Name, Language: s.System.Language, Model: r.Opts.Model, Started: time.Now()}
+	var failed, generated []string
 
 	for _, step := range p.Steps {
 		if ctx.Err() != nil {
 			return rep, ctx.Err()
 		}
 		r.logf("== module %s (goals %s)", step.Module, strings.Join(step.Goals, ","))
-		mr := r.runModule(ctx, s, step, ws)
+		generated = append(generated, step.Module)
+		mr := r.runModule(ctx, s, profile, step, ws, generated)
 		rep.Modules = append(rep.Modules, mr)
 		rep.Usage.Calls += mr.Usage.Calls
 		rep.Usage.InputTokens += mr.Usage.InputTokens
@@ -130,7 +148,7 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 	return rep, nil
 }
 
-func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws *workspace.Workspace) ModuleReport {
+func (r *Runner) runModule(ctx context.Context, s *spec.Spec, profile *lang.Profile, step plan.Step, ws *workspace.Workspace, generated []string) ModuleReport {
 	start := time.Now()
 	mr := ModuleReport{Module: step.Module}
 	fail := func(err error) ModuleReport {
@@ -138,15 +156,16 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws
 		mr.Duration = time.Since(start)
 		return mr
 	}
-	mod := s.Module(step.Module)
-	deps, err := dependencyFiles(ws, step.DependsOn)
+	task := agents.Task{Spec: s, Module: s.Module(step.Module), Lang: profile}
+	allowed := s.AllowedImports()
+	deps, err := dependencyFiles(ws, profile, step.DependsOn)
 	if err != nil {
 		return fail(err)
 	}
 
 	// 1. Code.
 	r.logf("   coder: writing implementation")
-	code, resp, err := r.Coder.Generate(ctx, agents.CodeInput{System: s.System, Module: *mod, Dependencies: deps})
+	code, resp, err := r.Coder.Generate(ctx, agents.CodeInput{Task: task, Dependencies: deps})
 	mr.Usage.Add(resp)
 	if err != nil {
 		return fail(err)
@@ -158,26 +177,46 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws
 	mr.Concerns = append(mr.Concerns, code.Concerns...)
 
 	// 2. Tests, derived from the spec with the code visible for identifiers.
+	// A proposal that imports a disallowed library gets one rewrite.
 	r.logf("   tester: writing tests")
-	tests, resp, err := r.Tester.Generate(ctx, agents.TestInput{System: s.System, Module: *mod, Code: code.Files, Dependencies: deps})
+	tests, resp, err := r.Tester.Generate(ctx, agents.TestInput{Task: task, Code: code.Files, Dependencies: deps})
 	mr.Usage.Add(resp)
 	if err != nil {
 		return fail(err)
+	}
+	if vs := checkImports(profile, tests.Files, allowed); len(vs) > 0 {
+		r.logf("   tester: rewriting (disallowed imports)")
+		feedback := workspace.FormatViolations(vs, allowed)
+		tests, resp, err = r.Tester.Generate(ctx, agents.TestInput{Task: task, Code: code.Files, Dependencies: deps, Feedback: feedback, Existing: tests.Files})
+		mr.Usage.Add(resp)
+		if err != nil {
+			return fail(err)
+		}
+		if vs := checkImports(profile, tests.Files, allowed); len(vs) > 0 {
+			return fail(fmt.Errorf("tester: %s", strings.TrimSpace(workspace.FormatViolations(vs, allowed))))
+		}
 	}
 	if err := ws.WriteFiles(tests.Files); err != nil {
 		return fail(err)
 	}
 	mr.Concerns = append(mr.Concerns, tests.Concerns...)
+	if err := ws.Sync(generated); err != nil {
+		return fail(err)
+	}
 
-	// 3. Run, and repair the implementation while it fails.
-	pattern := "./" + step.Module + "/..."
+	// 3. Run, and repair the implementation while it fails. Disallowed
+	// imports count as a failed run without spending a build.
 	var result workspace.Result
 	for attempt := 0; ; attempt++ {
 		mr.Iterations = attempt + 1
-		r.logf("   test run %d", mr.Iterations)
-		result, err = ws.Test(ctx, pattern)
-		if err != nil {
-			return fail(err)
+		if vs := checkImports(profile, code.Files, allowed); len(vs) > 0 {
+			result = workspace.Result{OK: false, Output: workspace.FormatViolations(vs, allowed)}
+		} else {
+			r.logf("   test run %d", mr.Iterations)
+			result, err = ws.Test(ctx, step.Module)
+			if err != nil {
+				return fail(err)
+			}
 		}
 		if result.OK || attempt >= r.Opts.MaxRepairs {
 			break
@@ -185,7 +224,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws
 		r.logf("   coder: repairing (%d of %d)", attempt+1, r.Opts.MaxRepairs)
 		previous := code.Files
 		code, resp, err = r.Coder.Generate(ctx, agents.CodeInput{
-			System: s.System, Module: *mod, Dependencies: deps,
+			Task: task, Dependencies: deps,
 			Existing: previous, Tests: tests.Files, Feedback: result.Output,
 		})
 		mr.Usage.Add(resp)
@@ -210,7 +249,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws
 	// 4. Judge.
 	r.logf("   validator: judging goals")
 	verdict, resp, err := r.Validator.Judge(ctx, agents.ValidateInput{
-		System: s.System, Module: *mod, GoalIDs: step.Goals,
+		Task: task, GoalIDs: step.Goals,
 		Code: code.Files, Tests: tests.Files, TestResult: result,
 		Coverage: tests.Coverage, Concerns: mr.Concerns,
 	})
@@ -223,8 +262,15 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, step plan.Step, ws
 	return mr
 }
 
+func checkImports(p *lang.Profile, files []workspace.File, allowed []string) []workspace.ImportViolation {
+	if p.CheckImports == nil {
+		return nil
+	}
+	return p.CheckImports(files, allowed)
+}
+
 // dependencyFiles collects the source (not tests) of the named modules.
-func dependencyFiles(ws *workspace.Workspace, deps []string) ([]workspace.File, error) {
+func dependencyFiles(ws *workspace.Workspace, p *lang.Profile, deps []string) ([]workspace.File, error) {
 	if len(deps) == 0 {
 		return nil, nil
 	}
@@ -234,11 +280,11 @@ func dependencyFiles(ws *workspace.Workspace, deps []string) ([]workspace.File, 
 	}
 	var out []workspace.File
 	for _, f := range tree {
-		if strings.HasSuffix(f.Path, "_test.go") {
+		if p.IsTestFile(f.Path) {
 			continue
 		}
 		for _, d := range deps {
-			if strings.HasPrefix(f.Path, d+"/") {
+			if strings.HasPrefix(f.Path, p.CodeDir(d)) {
 				out = append(out, f)
 				break
 			}

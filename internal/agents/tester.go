@@ -6,16 +6,19 @@ import (
 	"strings"
 
 	"github.com/eideroliveira/aspect/internal/llm"
-	"github.com/eideroliveira/aspect/internal/spec"
 	"github.com/eideroliveira/aspect/internal/workspace"
 )
 
 // TestInput is what the Tester sees.
 type TestInput struct {
-	System       spec.System
-	Module       spec.Module
+	Task
 	Code         []workspace.File
 	Dependencies []workspace.File
+	// Feedback is set when a previous proposal was rejected (for example for
+	// importing a library the spec does not allow) and the Tester gets one
+	// more attempt.
+	Feedback string
+	Existing []workspace.File
 }
 
 // ScenarioCoverage maps a spec scenario to the tests that exercise it.
@@ -43,12 +46,12 @@ const testerSystem = `You are the Tester agent in Aspect, a pipeline that builds
 Your tests are the executable form of the specification. Derive them from the scenarios, invariants, and pre/post conditions in the spec, not from what the implementation happens to do. The implementation is shown so your tests compile against its real identifiers; if it disagrees with the spec, the spec wins and the test should fail.
 
 Rules:
-- Write Go tests in the module's directory, package <module> (internal tests) unless the spec requires the external package.
 - Every scenario gets at least one test whose name includes the scenario id (TestReserve_S2). Report the mapping in coverage.
-- Every invariant gets a property-style test: drive the module through many operation sequences (a small deterministic fuzz with math/rand and a fixed seed, or table-driven sequences) and assert the invariant after each step.
-- Concurrency constraints get a test that runs operations from many goroutines; the pipeline runs tests with -race.
-- Standard library only. No test frameworks.
-- Only write files ending in _test.go inside the module's directory. Never modify implementation files.
+- Every invariant gets a property-style test: drive the module through many operation sequences and assert the invariant after each step.
+- Entities owned by the module get tests against the database configured for tests in the spec (an in-memory database when the test engine is sqlite; the DSN from the named environment variable when it is set). Never require a service the spec does not promise.
+- Surfaces get tests that exercise them the way a client would: HTTP handlers through an in-process test server, commands through their entry point, pages through their rendered output or view model.
+- Only write test files inside the module's test directory. Never modify implementation files.
+- Use only the libraries the stack section allows. The pipeline checks imports mechanically.
 - Answer with JSON matching the schema you were given.`
 
 var testSchema = map[string]any{
@@ -77,21 +80,26 @@ var testSchema = map[string]any{
 // Generate writes the module's tests.
 func (t *Tester) Generate(ctx context.Context, in TestInput) (TestOutput, llm.Response, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderSystem(in.System))
-	fmt.Fprintf(&b, "# Module under test\n\nImport path: %s/%s\n\n```yaml\n%s```\n\n",
-		in.System.ModulePath, in.Module.Name, renderYAML(in.Module))
+	b.WriteString(renderContext(in.Task))
+	b.WriteString(renderModule(in.Task, "Module under test"))
 	b.WriteString(renderFiles("Dependencies", in.Dependencies))
 	b.WriteString(renderFiles("Implementation (for identifiers only)", in.Code))
-	b.WriteString("Write the tests that would convince a sceptical reviewer the module meets its spec.\n")
+	if in.Feedback != "" {
+		b.WriteString(renderFiles("Your previous tests (rejected)", in.Existing))
+		fmt.Fprintf(&b, "## Why they were rejected\n\n```\n%s\n```\n\nRewrite the tests without the rejected dependencies. Return every test file.\n", truncate(in.Feedback, 8000))
+	} else {
+		b.WriteString("Write the tests that would convince a sceptical reviewer the module meets its spec.\n")
+	}
 
 	var out TestOutput
-	resp, err := complete(ctx, t.LLM, testerSystem, b.String(), testSchema, &out)
+	system := testerSystem + "\n\n" + in.Lang.TesterRules
+	resp, err := complete(ctx, t.LLM, system, b.String(), testSchema, &out)
 	if err != nil {
 		return out, resp, fmt.Errorf("tester: %w", err)
 	}
-	out.Files = keepModuleFiles(in.Module.Name, out.Files, true)
+	out.Files = in.Lang.KeepModuleFiles(in.Module.Name, out.Files, true)
 	if len(out.Files) == 0 {
-		return out, resp, fmt.Errorf("tester: returned no _test.go files inside %s/", in.Module.Name)
+		return out, resp, fmt.Errorf("tester: returned no test files inside %s", in.Lang.TestDir(in.Module.Name))
 	}
 	return out, resp, nil
 }

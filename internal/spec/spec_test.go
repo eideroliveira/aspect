@@ -137,3 +137,140 @@ func join(is Issues) string {
 	}
 	return b.String()
 }
+
+func TestValidateStackDatabaseInterfaces(t *testing.T) {
+	src := `
+aspect: 1
+system:
+  name: shop
+  intent: sell things
+  module_path: example.com/shop
+  goals:
+    - {id: G1, statement: products persist}
+  stack:
+    go:
+      frameworks:
+        - {name: qor5, module: github.com/qor5/admin/v3, purpose: admin UI}
+      orm: {name: gorm, module: gorm.io/gorm}
+      allowed_modules: [github.com/theplant/]
+    python:
+      frameworks: []
+  database:
+    engine: postgres
+    entities:
+      - name: Product
+        intent: a sellable item
+        fields:
+          - {name: ID, type: uint, key: primary}
+          - {name: SKU, type: string, unique: true, required: true}
+        relations:
+          - {kind: has_many, entity: Movement}
+      - name: Movement
+        fields:
+          - {name: ID, type: uint, key: primary}
+          - {name: Qty, type: int}
+  interfaces:
+    - name: admin
+      kind: web
+      intent: back office
+      framework: qor5
+      surfaces:
+        - {name: products, route: /admin/products, entity: Product, operations: [list, create]}
+    - name: api
+      kind: http
+      intent: integrations
+      surfaces:
+        - {name: reserve, route: /api/reserve, method: POST}
+        - {name: broken}
+modules:
+  - name: catalog
+    intent: own products
+    goals: [G1]
+    entities: [Product]
+    surfaces: [admin]
+    scenarios:
+      - {id: S1, when: create, then: exists}
+  - name: stock
+    intent: own movements
+    entities: [Movement]
+    surfaces: [api.reserve, api.nope]
+    scenarios:
+      - {id: S1, when: reserve, then: ok}
+`
+	s, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.System.Database.Migrations != "auto" || s.System.Database.Test.Engine != "sqlite" {
+		t.Fatalf("database defaults not applied: %+v", s.System.Database)
+	}
+	issues := Validate(s)
+	text := join(issues)
+	for _, want := range []string{
+		`system.stack.python: configured for "python"`,
+		`entity "Movement" has no intent`,
+		`http surfaces need route and method`,
+		`surface "api.broken" is not implemented`,
+		`unknown surface "nope" in interface "api"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing issue containing %q\nall issues:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{`unknown entity`, `"Product" is not owned`, `framework`} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("unexpected issue containing %q\nall issues:\n%s", unwanted, text)
+		}
+	}
+	allowed := s.AllowedImports()
+	want := []string{"example.com/shop", "github.com/qor5/admin/v3", "gorm.io/gorm", "github.com/theplant/"}
+	if strings.Join(allowed, ",") != strings.Join(want, ",") {
+		t.Fatalf("AllowedImports = %v, want %v", allowed, want)
+	}
+	refs, errs := s.ResolveSurfaces([]string{"admin", "api.reserve"})
+	if len(errs) != 0 || len(refs) != 2 || refs[0].ID() != "admin.products" || refs[1].ID() != "api.reserve" {
+		t.Fatalf("ResolveSurfaces = %+v, %v", refs, errs)
+	}
+}
+
+func TestValidateOwnershipConflicts(t *testing.T) {
+	src := `
+aspect: 1
+system:
+  name: shop
+  intent: sell things
+  module_path: example.com/shop
+  goals: [{id: G1, statement: x}]
+  database:
+    engine: mysql
+    test: {engine: mysql}
+    entities:
+      - {name: A, intent: a, fields: [{name: ID, type: int, key: primary}]}
+      - {name: B, intent: b, fields: [{name: ID, type: int, key: primary}]}
+  interfaces:
+    - name: api
+      kind: http
+      intent: i
+      framework: ghost
+      surfaces: [{name: x, route: /x, method: GET}]
+modules:
+  - {name: m1, intent: i, goals: [G1], entities: [A], surfaces: [api.x]}
+  - {name: m2, intent: i, entities: [A], surfaces: [api.x]}
+`
+	s, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := join(Validate(s))
+	for _, want := range []string{
+		`entity "A" is owned by several modules (m1, m2)`,
+		`entity "B" is not owned by any module`,
+		`surface "api.x" is implemented by several modules`,
+		`"ghost" is not declared in system.stack.go.frameworks`,
+		`tests run against mysql but no dsn_env is set`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing issue containing %q\nall issues:\n%s", want, text)
+		}
+	}
+}

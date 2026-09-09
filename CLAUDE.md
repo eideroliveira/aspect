@@ -8,9 +8,10 @@ whether the result achieves the spec's stated goals. Go module
 
 - `internal/spec` — spec format (YAML), loader, semantic validator. Pure Go, no LLM.
 - `internal/plan` — deterministic build order from the module dependency graph.
+- `internal/lang` — language profiles (go, swift): layout, manifest, toolchain steps, import guard, prompt rules. Agents and pipeline never branch on language.
 - `internal/llm` — the only package that calls the Anthropic API. Agents use the `llm.Client` interface.
 - `internal/agents` — Coder, Tester, Validator. Pure functions of their input plus a client; never touch disk.
-- `internal/workspace` — writes proposed files (path-guarded) and runs `go vet` / `go test -race`.
+- `internal/workspace` — writes proposed files (path-guarded) and runs the profile's toolchain steps.
 - `internal/pipeline` — orchestration and the report.
 - `cmd/aspect` — CLI: `validate`, `plan`, `run`.
 - `examples/` — reference specs; CI validates them.

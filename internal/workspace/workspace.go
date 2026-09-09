@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -24,40 +23,57 @@ type File struct {
 	Content string `json:"content"`
 }
 
-// Workspace is one generated Go module on disk.
-type Workspace struct {
-	Root       string
-	ModulePath string
-	// TestTimeout bounds one `go test` run. Generated code can loop forever;
-	// the pipeline must not.
-	TestTimeout time.Duration
+// Toolchain is what the workspace needs to know about the target language.
+// The lang package builds one from a profile and the spec.
+type Toolchain struct {
+	// SourceExt selects the files ReadTree returns.
+	SourceExt string
+	// Protected are manifest basenames agents may not write (go.mod, Package.swift).
+	Protected []string
+	// Init writes the manifest once when the workspace is created.
+	Init func(root string) error
+	// Sync updates the manifest for the modules present so far.
+	Sync func(root string, modules []string) error
+	// Steps are the commands, run in root, that build and test one module.
+	Steps func(module string) [][]string
 }
 
-// Result of a compile-and-test run.
+// Workspace is one generated project on disk.
+type Workspace struct {
+	Root string
+	// TestTimeout bounds one build-and-test run. Generated code can loop
+	// forever; the pipeline must not.
+	TestTimeout time.Duration
+	tc          Toolchain
+}
+
+// Result of a build-and-test run.
 type Result struct {
 	OK       bool          `json:"ok"`
 	Output   string        `json:"output"`
 	Duration time.Duration `json:"duration"`
 }
 
-// New creates the root directory and a go.mod for the module if none exists.
-func New(root, modulePath string) (*Workspace, error) {
+// New creates the root directory and the manifest.
+func New(root string, tc Toolchain) (*Workspace, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	w := &Workspace{Root: root, ModulePath: modulePath, TestTimeout: 2 * time.Minute}
-	gomod := filepath.Join(root, "go.mod")
-	if _, err := os.Stat(gomod); os.IsNotExist(err) {
-		goVersion := strings.TrimPrefix(runtime.Version(), "go")
-		if i := strings.Index(goVersion, " "); i > 0 {
-			goVersion = goVersion[:i]
-		}
-		content := fmt.Sprintf("module %s\n\ngo %s\n", modulePath, goVersion)
-		if err := os.WriteFile(gomod, []byte(content), 0o644); err != nil {
+	if tc.Init != nil {
+		if err := tc.Init(root); err != nil {
 			return nil, err
 		}
 	}
-	return w, nil
+	return &Workspace{Root: root, TestTimeout: 3 * time.Minute, tc: tc}, nil
+}
+
+// Sync regenerates the manifest for the given modules (no-op for languages
+// whose manifest does not list modules).
+func (w *Workspace) Sync(modules []string) error {
+	if w.tc.Sync == nil {
+		return nil
+	}
+	return w.tc.Sync(w.Root, modules)
 }
 
 // WriteFiles applies a set of files. Paths must stay inside the root; an agent
@@ -101,21 +117,31 @@ func (w *Workspace) safePath(p string) (string, error) {
 	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
 		return "", fmt.Errorf("workspace: path %q escapes the workspace", p)
 	}
-	if filepath.Base(clean) == "go.mod" || filepath.Base(clean) == "go.sum" {
-		return "", fmt.Errorf("workspace: agents may not rewrite %s", clean)
+	base := filepath.Base(clean)
+	for _, protected := range w.tc.Protected {
+		if base == protected {
+			return "", fmt.Errorf("workspace: agents may not rewrite %s", clean)
+		}
 	}
 	return filepath.Join(w.Root, clean), nil
 }
 
-// ReadTree returns every .go file under the root, sorted by path, so agents
-// can be shown the current state of the module.
+// ReadTree returns every source file under the root, sorted by path, so agents
+// can be shown the current state of the project.
 func (w *Workspace) ReadTree() ([]File, error) {
 	var files []File
 	err := filepath.WalkDir(w.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+		if d.IsDir() {
+			// Build products are large and never interesting to agents.
+			if d.Name() == ".build" && path != w.Root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if w.tc.SourceExt != "" && !strings.HasSuffix(path, w.tc.SourceExt) {
 			return nil
 		}
 		rel, err := filepath.Rel(w.Root, path)
@@ -133,21 +159,16 @@ func (w *Workspace) ReadTree() ([]File, error) {
 	return files, err
 }
 
-// Test runs `go mod tidy`, `go vet` and `go test` for the whole module and
-// returns the combined output. A non-nil error means the tooling itself could
-// not run; a failing build or test is reported through Result.OK.
-func (w *Workspace) Test(ctx context.Context, pkgPattern string) (Result, error) {
+// Test runs the toolchain's steps for one module and returns the combined
+// output. A non-nil error means the tooling itself could not run; a failing
+// build or test is reported through Result.OK.
+func (w *Workspace) Test(ctx context.Context, module string) (Result, error) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, w.TestTimeout)
 	defer cancel()
 
 	var out bytes.Buffer
-	steps := [][]string{
-		{"go", "mod", "tidy"},
-		{"go", "vet", pkgPattern},
-		{"go", "test", "-count=1", "-race", pkgPattern},
-	}
-	for _, args := range steps {
+	for _, args := range w.tc.Steps(module) {
 		fmt.Fprintf(&out, "$ %s\n", strings.Join(args, " "))
 		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		cmd.Dir = w.Root
@@ -163,7 +184,7 @@ func (w *Workspace) Test(ctx context.Context, pkgPattern string) (Result, error)
 			if !asExitError(err, &exitErr) {
 				return Result{}, fmt.Errorf("run %v: %w", args, err)
 			}
-			fmt.Fprintf(&out, "\n[aspect] %s exited with %v\n", args[1], exitErr)
+			fmt.Fprintf(&out, "\n[aspect] %s exited with %v\n", strings.Join(args[:2], " "), exitErr)
 			return Result{OK: false, Output: out.String(), Duration: time.Since(start)}, nil
 		}
 	}

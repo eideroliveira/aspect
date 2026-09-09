@@ -25,6 +25,7 @@ Usage:
 
 Run flags:
   -out DIR          output directory (default ./out)
+                    Go specs produce a Go module; Swift specs a SwiftPM package
   -model ID         model id (default $ASPECT_MODEL or claude-opus-5)
   -effort LEVEL     low|medium|high|xhigh|max (default high)
   -max-repairs N    coder repair rounds per module (default 3)
@@ -77,7 +78,7 @@ func runValidate(path string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("ok: %s (%d modules, %d goals, %d warnings)\n", s.System.Name, len(s.Modules), len(s.System.Goals), len(issues))
+	fmt.Printf("ok: %s (%s, %d modules, %d goals, %d warnings)\n", s.System.Name, s.System.Language, len(s.Modules), len(s.System.Goals), len(issues))
 	return nil
 }
 
@@ -97,6 +98,12 @@ func runPlan(path string) error {
 			fmt.Printf("   depends on: %v\n", st.DependsOn)
 		}
 		fmt.Printf("   coder     -> implement %d operation(s)\n", len(s.Module(st.Module).Interface))
+		if len(st.Entities) > 0 {
+			fmt.Printf("   owns entities: %v\n", st.Entities)
+		}
+		if len(st.Surfaces) > 0 {
+			fmt.Printf("   implements: %v\n", st.Surfaces)
+		}
 		fmt.Printf("   tester    -> %d scenario(s), %d invariant(s)\n", st.Scenarios, st.Invariants)
 		fmt.Printf("   validator -> verdict on goals %v\n", st.Goals)
 	}
