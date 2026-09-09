@@ -1,0 +1,109 @@
+# Aspect specification, format version 1.
+# A small warehouse stock tracker: enough surface to exercise every agent.
+aspect: 1
+
+system:
+  name: inventory
+  intent: >
+    Keep an accurate count of physical stock per SKU for a small warehouse,
+    so that staff never promise goods that are not on the shelf and every
+    change of quantity is traceable to a recorded movement.
+  language: go
+  module_path: example.com/inventory
+  goals:
+    - id: G1
+      statement: Stock levels never go negative, whatever sequence of operations is applied.
+      verify: invariant
+    - id: G2
+      statement: Every change to a SKU's level is explained by exactly one recorded movement.
+      verify: invariant
+    - id: G3
+      statement: A reservation holds goods for an order so they cannot be sold twice.
+      verify: test
+    - id: G4
+      statement: The public API is small, idiomatic Go with no global mutable state.
+      verify: review
+  constraints:
+    - Standard library only; no third-party dependencies.
+    - All operations are safe for concurrent use from multiple goroutines.
+
+modules:
+  - name: ledger
+    intent: >
+      Own the append-only history of stock movements. It is the audit trail
+      behind every level shown to staff.
+    goals: [G2]
+    interface:
+      - name: Record
+        signature: "func (l *Ledger) Record(m Movement) (MovementID, error)"
+        intent: Append a movement. Rejects zero quantity.
+        pre: ["m.Qty != 0"]
+        post: ["len(l.History(m.SKU)) == old(len(l.History(m.SKU))) + 1"]
+      - name: History
+        signature: "func (l *Ledger) History(sku string) []Movement"
+        intent: Return every movement for a SKU, oldest first.
+    invariants:
+      - Movements are never modified or deleted once recorded.
+      - History returns movements in the order they were recorded.
+    scenarios:
+      - id: S1
+        given: an empty ledger
+        when: Record({SKU:"A", Qty:5, Reason:"receipt"})
+        then: History("A") has one movement with Qty 5
+        goals: [G2]
+      - id: S2
+        given: an empty ledger
+        when: Record({SKU:"A", Qty:0})
+        then: an error is returned and History("A") is empty
+
+  - name: stock
+    intent: >
+      Answer "how many of X can we promise right now?" and enforce that no
+      movement can take a SKU below zero. Delegates the audit trail to ledger.
+    goals: [G1, G3, G4]
+    depends_on: [ledger]
+    interface:
+      - name: Receive
+        signature: "func (s *Stock) Receive(sku string, qty int) error"
+        intent: Add goods to the shelf.
+        pre: ["qty > 0"]
+        post: ["s.Available(sku) == old(s.Available(sku)) + qty"]
+      - name: Reserve
+        signature: "func (s *Stock) Reserve(sku string, qty int, order string) error"
+        intent: Hold goods for an order. Fails if fewer than qty are available.
+        pre: ["qty > 0"]
+        post: ["s.Available(sku) == old(s.Available(sku)) - qty"]
+      - name: Release
+        signature: "func (s *Stock) Release(sku string, qty int, order string) error"
+        intent: Give reserved goods back to the available pool.
+      - name: Ship
+        signature: "func (s *Stock) Ship(sku string, qty int, order string) error"
+        intent: Remove reserved goods from the warehouse for good.
+      - name: Available
+        signature: "func (s *Stock) Available(sku string) int"
+        intent: Goods on the shelf not held by any reservation.
+    invariants:
+      - For every SKU, on-hand quantity is >= 0 and reserved quantity is >= 0.
+      - Available(sku) == on-hand(sku) - reserved(sku) at all times.
+      - Every successful Receive, Reserve, Release and Ship records exactly one ledger movement.
+    scenarios:
+      - id: S1
+        given: Receive("A", 5)
+        when: Reserve("A", 3, "order-1")
+        then: Available("A") == 2
+        goals: [G3]
+      - id: S2
+        given: Receive("A", 5)
+        when: Reserve("A", 6, "order-1")
+        then: an error is returned and Available("A") == 5
+        goals: [G1, G3]
+      - id: S3
+        given: Receive("A", 5) then Reserve("A", 3, "order-1")
+        when: Ship("A", 3, "order-1")
+        then: Available("A") == 2 and the ledger holds three movements for "A"
+        goals: [G3]
+      - id: S4
+        given: an empty stock
+        when: 100 goroutines each Receive("B", 1) then Reserve("B", 1, "o")
+        then: Available("B") == 0 and no operation returned an error
+        goals: [G1]

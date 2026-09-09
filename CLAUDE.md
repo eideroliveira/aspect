@@ -1,0 +1,35 @@
+# Aspect
+
+Agents that turn a formal specification into code, tests, and a verdict on
+whether the result achieves the spec's stated goals. Go module
+`github.com/eideroliveira/aspect`.
+
+## Layout
+
+- `internal/spec` — spec format (YAML), loader, semantic validator. Pure Go, no LLM.
+- `internal/plan` — deterministic build order from the module dependency graph.
+- `internal/llm` — the only package that calls the Anthropic API. Agents use the `llm.Client` interface.
+- `internal/agents` — Coder, Tester, Validator. Pure functions of their input plus a client; never touch disk.
+- `internal/workspace` — writes proposed files (path-guarded) and runs `go vet` / `go test -race`.
+- `internal/pipeline` — orchestration and the report.
+- `cmd/aspect` — CLI: `validate`, `plan`, `run`.
+- `examples/` — reference specs; CI validates them.
+- `docs/` — architecture and spec format.
+
+## Rules
+
+- Write all engineering text in English.
+- Agents propose, the workspace applies. Do not add filesystem or exec calls to `internal/agents`.
+- The Validator must never share a prompt or output with the Coder or Tester; separation is the point.
+- Every agent output is structured JSON with a schema in the agent's file; keep schemas `additionalProperties: false`.
+- Tests must run without an API key. Use the fake clients in `*_test.go`; never call the network in tests.
+- Stage files explicitly (`git add <path>`), never `git add .` or `-A`.
+- Never squash-merge PRs.
+
+## Verify
+
+```
+gofmt -l . && go vet ./... && go test -race ./...
+go run ./cmd/aspect validate examples/inventory/aspect.yaml
+go run ./cmd/aspect plan examples/inventory/aspect.yaml
+```

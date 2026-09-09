@@ -1,0 +1,22 @@
+# Build artefacts
+/aspect
+/bin/
+/dist/
+
+# Pipeline output (generated code, reports)
+/out/
+
+# Local environment
+.env
+.env.*
+*.local
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Go
+*.test
+*.out
+coverage.*
