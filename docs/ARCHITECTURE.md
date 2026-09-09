@@ -90,6 +90,23 @@ Two rules make the report conservative:
   one call is re-served by a fallback model instead of aborting the run.
 - Effort defaults to `high`; `xhigh` is worth trying for large modules.
 
+## Tiers
+
+A multi-tier spec is a set of single-tier specs joined by interfaces. The
+pipeline builds tiers in dependency order, each in its own workspace with its
+own language profile, manifest and import allowlist. Modules see the whole
+system in outline (every tier, every interface with its provider) but only
+their own tier's stack, and the full contract of the surfaces they implement
+or consume. A consumed surface is rendered with a note that it is served
+elsewhere: the module must implement a client against the contract, with
+the base address from configuration.
+
+Single-tier specs are handled through the same code path: the spec exposes
+an implicit tier with an empty name, so nothing branches on the spec's
+shape. Ownership rules become tier-aware (entities belong to the database's
+tier, surfaces to the provider's tier, `depends_on` never crosses tiers),
+and the topology field is validated against the shape it claims.
+
 ## Language profiles
 
 `internal/lang` is the only place that knows a language's layout, manifest,
@@ -139,11 +156,21 @@ Two modes share the same agents:
   canonical name (`api`, `web`, `admin`, `cli`, `grpc`). The Synthesizer
   contributes only the system level: intent, goals mapped to modules, stack,
   interface metadata.
-- **Retarget** (for example Go to Swift): the Synthesizer designs the module
-  list for the target platform from the fragments, with web and admin
-  surfaces becoming `app` screens and the backend API becoming an `http`
-  interface with `role: consumer`. The assembler sanitises identifiers and
-  validates; it does not redesign.
+- **Retarget** (monolith in another language): the Synthesizer designs the
+  module list for the target platform from the fragments. The assembler
+  sanitises identifiers and validates; it does not redesign.
+- **Tiered** (`api_backend`, `cloud_service`): for `api_backend` with the
+  backend in the source language, the backend tier is mirrored from the
+  fragments and the Synthesizer proposes only the modules to add (typically
+  the API module the frontend needs) plus the frontend tier's design; web
+  and admin surfaces become `app` or `web` screens provided by the frontend,
+  and modules that call the backend list its surfaces under `consumes`. For
+  `cloud_service` the Synthesizer designs a single app tier and declares
+  everything server-side as external providers.
+
+Assembly's last pass moves any surface a module "implements" but does not
+provide into `consumes`, so a model that blurs the line still yields a
+valid spec.
 
 The inventory is the only language-specific part of the importer. Adding a
 source language means adding an analyser that produces the same `Package`

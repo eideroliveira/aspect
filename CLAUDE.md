@@ -6,7 +6,7 @@ whether the result achieves the spec's stated goals. Go module
 
 ## Layout
 
-- `internal/spec` — spec format (YAML), loader, semantic validator. Pure Go, no LLM.
+- `internal/spec` — spec format (YAML), loader, semantic validator. Pure Go, no LLM. Single-tier specs are an implicit tier (`EffectiveTiers`); never branch on the spec's shape elsewhere.
 - `internal/plan` — deterministic build order from the module dependency graph.
 - `internal/lang` — language profiles (go, swift): layout, manifest, toolchain steps, import guard, prompt rules. Agents and pipeline never branch on language.
 - `internal/llm` — the only package that calls the Anthropic API. Agents use the `llm.Client` interface.
@@ -28,6 +28,7 @@ whether the result achieves the spec's stated goals. Go module
 - Tests must run without an API key. Use the fake clients in `*_test.go`; never call the network in tests.
 - Stage files explicitly (`git add <path>`), never `git add .` or `-A`.
 - Never squash-merge PRs.
+- Every yaml tag on spec structs has a matching json tag; the Synthesizer's output is decoded with encoding/json and snake_case keys would otherwise be dropped silently.
 
 ## Verify
 

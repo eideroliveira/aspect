@@ -28,8 +28,8 @@ func (rep *Report) Write(outDir string) error {
 func (rep *Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Aspect report: %s\n\n", rep.System)
-	fmt.Fprintf(&b, "Language: %s  \nModel: `%s`  \nStarted: %s  \nDuration: %s  \nLLM calls: %d (in %d / out %d / cached %d tokens)\n\n",
-		rep.Language, rep.Model, rep.Started.Format("2006-01-02 15:04:05"), rep.Finished.Sub(rep.Started).Round(1e9),
+	fmt.Fprintf(&b, "Topology: %s  \nLanguage: %s  \nModel: `%s`  \nStarted: %s  \nDuration: %s  \nLLM calls: %d (in %d / out %d / cached %d tokens)\n\n",
+		rep.Topology, rep.Language, rep.Model, rep.Started.Format("2006-01-02 15:04:05"), rep.Finished.Sub(rep.Started).Round(1e9),
 		rep.Usage.Calls, rep.Usage.InputTokens, rep.Usage.OutputTokens, rep.Usage.CacheReadTokens)
 
 	b.WriteString("## Goals\n\n| Goal | Verify | Status | By module |\n|---|---|---|---|\n")
@@ -41,8 +41,19 @@ func (rep *Report) Markdown() string {
 		fmt.Fprintf(&b, "| **%s** %s | %s | %s | %s |\n", g.ID, g.Statement, g.Verify, badge(string(g.Status)), strings.Join(parts, "<br>"))
 	}
 
+	if len(rep.Tiers) > 1 {
+		b.WriteString("\n## Tiers\n\n| Tier | Language | Output |\n|---|---|---|\n")
+		for _, t := range rep.Tiers {
+			fmt.Fprintf(&b, "| %s | %s | `%s` |\n", t.Name, t.Language, t.Dir)
+		}
+	}
+
 	for _, m := range rep.Modules {
-		fmt.Fprintf(&b, "\n## Module `%s`\n\n", m.Module)
+		if m.Tier != "" {
+			fmt.Fprintf(&b, "\n## Module `%s` (tier %s)\n\n", m.Module, m.Tier)
+		} else {
+			fmt.Fprintf(&b, "\n## Module `%s`\n\n", m.Module)
+		}
 		if m.Error != "" {
 			fmt.Fprintf(&b, "**Failed:** %s\n\n", m.Error)
 		}

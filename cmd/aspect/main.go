@@ -44,8 +44,16 @@ Inventory and import flags:
 
 Import flags:
   -o FILE           where to write the spec (default aspect.yaml)
-  -language LANG    target language; when it differs from the source (go) the spec
-                    is re-expressed for the target, e.g. -language swift for an iOS app
+  -language LANG    language of the new system, or of its frontend tier (default: source)
+  -topology T       monolith | api_backend | cloud_service
+                    monolith:      one tier connecting to its own database (default when
+                                   the language does not change)
+                    api_backend:   a backend tier serving an API (mirrors the source when
+                                   it keeps the source language) plus a frontend tier in
+                                   -language consuming it (default when the language changes)
+                    cloud_service: one app tier in -language over hosted services; the
+                                   database and server interfaces are external
+  -backend-language L  language of the api_backend backend tier (default: source)
   -hint TEXT        guidance for the target ("an iOS app for members; admin stays on the web")
   -name NAME        system name (default: last element of the module path)
   -module-path P    target module path
@@ -104,7 +112,11 @@ func runValidate(path string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("ok: %s (%s, %d modules, %d goals, %d warnings)\n", s.System.Name, s.System.Language, len(s.Modules), len(s.System.Goals), len(issues))
+	var langs []string
+	for _, t := range s.EffectiveTiers() {
+		langs = append(langs, t.Language)
+	}
+	fmt.Printf("ok: %s (%s, %s, %d modules, %d goals, %d warnings)\n", s.System.Name, s.EffectiveTopology(), strings.Join(langs, "+"), len(s.AllModules()), len(s.System.Goals), len(issues))
 	return nil
 }
 
@@ -117,21 +129,32 @@ func runPlan(path string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("system %s: %d modules in build order\n\n", p.System, len(p.Steps))
-	for i, st := range p.Steps {
-		fmt.Printf("%d. %s\n", i+1, st.Module)
-		if len(st.DependsOn) > 0 {
-			fmt.Printf("   depends on: %v\n", st.DependsOn)
+	fmt.Printf("system %s (%s): %d modules in build order\n", p.System, p.Topology, len(p.Steps()))
+	i := 0
+	for _, tp := range p.Tiers {
+		if tp.Name != "" {
+			fmt.Printf("\n## tier %s (%s) -> %s\n", tp.Name, tp.Language, pipeline.TierDir("out", s.System.Name, tp.Name))
 		}
-		fmt.Printf("   coder     -> implement %d operation(s)\n", len(s.Module(st.Module).Interface))
-		if len(st.Entities) > 0 {
-			fmt.Printf("   owns entities: %v\n", st.Entities)
+		fmt.Println()
+		for _, st := range tp.Steps {
+			i++
+			fmt.Printf("%d. %s\n", i, st.Module)
+			if len(st.DependsOn) > 0 {
+				fmt.Printf("   depends on: %v\n", st.DependsOn)
+			}
+			fmt.Printf("   coder     -> implement %d operation(s)\n", len(s.Module(st.Module).Interface))
+			if len(st.Entities) > 0 {
+				fmt.Printf("   owns entities: %v\n", st.Entities)
+			}
+			if len(st.Surfaces) > 0 {
+				fmt.Printf("   implements: %v\n", st.Surfaces)
+			}
+			if len(st.Consumes) > 0 {
+				fmt.Printf("   consumes: %v\n", st.Consumes)
+			}
+			fmt.Printf("   tester    -> %d scenario(s), %d invariant(s)\n", st.Scenarios, st.Invariants)
+			fmt.Printf("   validator -> verdict on goals %v\n", st.Goals)
 		}
-		if len(st.Surfaces) > 0 {
-			fmt.Printf("   implements: %v\n", st.Surfaces)
-		}
-		fmt.Printf("   tester    -> %d scenario(s), %d invariant(s)\n", st.Scenarios, st.Invariants)
-		fmt.Printf("   validator -> verdict on goals %v\n", st.Goals)
 	}
 	return nil
 }
@@ -225,6 +248,8 @@ func runImport(dir string, args []string) error {
 	include := fs.String("include", "", "package directories to include")
 	exclude := fs.String("exclude", "", "package directories to exclude")
 	language := fs.String("language", "", "target language (default: the source language)")
+	topology := fs.String("topology", "", "monolith | api_backend | cloud_service")
+	backendLanguage := fs.String("backend-language", "", "backend tier language for api_backend")
 	hint := fs.String("hint", "", "guidance for the target platform")
 	name := fs.String("name", "", "system name")
 	modulePath := fs.String("module-path", "", "target module path")
@@ -251,6 +276,7 @@ func runImport(dir string, args []string) error {
 	res, err := importer.Run(ctx, client, importer.Options{
 		Root: dir, Include: splitList(*include), Exclude: splitList(*exclude),
 		Target: *language, TargetHint: *hint, Name: *name, ModulePath: *modulePath,
+		Topology: spec.Topology(*topology), BackendLanguage: *backendLanguage,
 		Repository: gitRemote(dir), Commit: gitHead(dir),
 		CacheDir: *cache, Concurrency: *concurrency, Log: os.Stderr,
 	})
@@ -269,8 +295,8 @@ func runImport(dir string, args []string) error {
 	for _, i := range res.Issues {
 		fmt.Fprintln(os.Stderr, i)
 	}
-	fmt.Printf("wrote %s: %s (%s, %d modules, %d goals, %d entities, %d interfaces)\n", *out, res.Spec.System.Name, res.Spec.System.Language,
-		len(res.Spec.Modules), len(res.Spec.System.Goals), entityCount(res.Spec), len(res.Spec.System.Interfaces))
+	fmt.Printf("wrote %s: %s (%s, %d tier(s), %d modules, %d goals, %d entities, %d interfaces)\n", *out, res.Spec.System.Name, res.Spec.EffectiveTopology(),
+		len(res.Spec.EffectiveTiers()), len(res.Spec.AllModules()), len(res.Spec.System.Goals), entityCount(res.Spec), len(res.Spec.System.Interfaces))
 	if res.Issues.HasErrors() {
 		return fmt.Errorf("the recovered spec has validation errors; fix them in %s and run `aspect validate`", *out)
 	}
@@ -278,10 +304,11 @@ func runImport(dir string, args []string) error {
 }
 
 func entityCount(s *spec.Spec) int {
-	if s.System.Database == nil {
-		return 0
+	n := 0
+	for _, db := range s.Databases() {
+		n += len(db.Entities)
 	}
-	return len(s.System.Database.Entities)
+	return n
 }
 
 func mustAbs(p string) string {

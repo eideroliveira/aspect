@@ -50,6 +50,14 @@ Specs are language-agnostic. `system.language` picks a profile (`go` or
 `swift` today) that decides layout, manifest and toolchain, so the same spec
 can be built as a Go service and as a SwiftPM package for iOS.
 
+A spec can also be split into **tiers** with a `topology`: `monolith` (one
+tier on its own database), `api_backend` (a backend tier serving an API and
+a web or mobile frontend tier consuming it, each in its own language), or
+`cloud_service` (one app tier over hosted services). Tiers talk only through
+interfaces that one tier provides and others consume; each is generated into
+its own workspace in dependency order. See
+[examples/shop_two_tier/aspect.yaml](examples/shop_two_tier/aspect.yaml).
+
 ## The agents
 
 | Agent | Input | Output | Cannot |
@@ -94,8 +102,17 @@ aspect inventory ~/src/shop -exclude external            # deterministic, no mod
 aspect import    ~/src/shop -o shop.yaml                  # same language: one module per package
 aspect import    ~/src/shop -o shop-ios.yaml -language swift \
                  -hint "an iOS app for members; the admin stays on the web"
-aspect run shop-ios.yaml -out ./out                       # build the SwiftPM package
+aspect run shop-ios.yaml -out ./out                       # backend under out/shop/backend, app under out/shop/mobile
 ```
+
+The `-topology` flag chooses the shape of the new system. `monolith` keeps
+one tier on its own database (the default when the language does not
+change). `api_backend` is the default when the language changes, because a
+mobile app cannot open the database: the backend tier mirrors the existing
+packages plus whatever API module the frontend needs, and the frontend tier
+is designed for the target language. `cloud_service` generates only the
+app tier over hosted services (Supabase, Firebase, an existing API) declared
+as external providers.
 
 Import runs in three stages. The **inventory** is deterministic: packages,
 exported API, persistent structs (from ORM tags), routes, tests and the
@@ -129,8 +146,10 @@ Early. What exists today:
   JSON outputs, prompt caching, streaming, and refusal fallbacks.
 - Workspace runner per language with a timeout.
 - Repair loop and per-module, per-goal report.
+- Tiers and topologies: monolith, api_backend (backend + frontend in
+  different languages, each in its own workspace), cloud_service.
 - `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
-  optionally re-expressed for Swift/iOS.
+  optionally split into tiers and re-expressed for Swift/iOS.
 - Tests run offline against fake clients, including end-to-end pipeline
   tests that exercise a real repair round through the Go toolchain and a
   real build through the Swift toolchain.

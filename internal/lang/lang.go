@@ -33,11 +33,11 @@ type Profile struct {
 	// IsTestFile reports whether a path is a test file.
 	IsTestFile func(path string) bool
 
-	// Init writes the workspace manifest (go.mod, Package.swift) once.
-	Init func(root string, s *spec.Spec) error
+	// Init writes the tier's workspace manifest (go.mod, Package.swift) once.
+	Init func(root string, s *spec.Spec, t *spec.Tier) error
 	// Sync updates the manifest for the modules generated so far. Go needs
 	// nothing; SwiftPM must list every target it can see on disk.
-	Sync func(root string, s *spec.Spec, modules []string) error
+	Sync func(root string, s *spec.Spec, t *spec.Tier, modules []string) error
 	// Steps are the commands, run in root, that build and test one module.
 	Steps func(module string) [][]string
 	// CheckImports enforces the spec's import allowlist. May be nil.

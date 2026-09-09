@@ -73,9 +73,9 @@ func fragmentSchema() map[string]any {
 	surface := obj([]string{"name", "intent", "route", "method", "entity", "operations", "request", "response", "errors", "auth"}, map[string]any{
 		"name": str, "intent": str, "route": str, "method": str, "entity": str, "operations": stringList(), "request": str, "response": str, "errors": stringList(), "auth": str,
 	})
-	iface := obj([]string{"name", "kind", "intent", "framework", "auth", "role", "surfaces"}, map[string]any{
+	iface := obj([]string{"name", "kind", "intent", "framework", "auth", "surfaces"}, map[string]any{
 		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
-		"role": map[string]any{"type": "string", "enum": []string{"provider", "consumer"}}, "surfaces": arr(surface),
+		"surfaces": arr(surface),
 	})
 	operation := obj([]string{"name", "signature", "intent", "pre", "post"}, map[string]any{
 		"name": str, "signature": str, "intent": str, "pre": stringList(), "post": stringList(),
@@ -118,7 +118,10 @@ type Synthesis struct {
 	Interfaces  []spec.Interface   `json:"interfaces"`
 	Database    *spec.Database     `json:"database"`
 	Modules     []spec.Module      `json:"modules"`
-	Notes       string             `json:"notes"`
+	// Tiers is set in tiered modes (api_backend): one entry per tier. For a
+	// backend tier that mirrors the source, Modules holds only additions.
+	Tiers []spec.Tier `json:"tiers"`
+	Notes string      `json:"notes"`
 }
 
 // SynthesisGoal is a system goal with the modules accountable for it.
@@ -150,100 +153,170 @@ Answer with JSON matching the schema.`
 
 const retargetSystem = `You are the Synthesizer agent in Aspect, a pipeline that recovers a formal specification from an existing codebase and re-expresses it for a different platform.
 
-You receive the fragments the Describer wrote for every package of the SOURCE system, plus the inventory summary, and a TARGET language. Write a complete Aspect spec for a new system in the target language that serves the same users and achieves the same goals. This is a translation of intent, not of code:
+You receive the fragments the Describer wrote for every package of the SOURCE system, plus the inventory summary, and a TARGET language. Write a complete Aspect spec for a new single-tier system in the target language that serves the same users and achieves the same goals, connecting directly to its own database (monolith topology). This is a translation of intent, not of code:
 
 - System intent and goals are those of the source, restated for the target. Every goal names the target modules accountable for it.
-- Modules: design the module list a good engineer would choose for the target platform (for an iOS app: models, persistence, an API client, feature modules with view models and SwiftUI views), not a mirror of the source packages. Each module has an intent, depends_on, the entities it owns, the surfaces it implements, language-neutral interface operations, invariants and concrete scenarios (ids S1, S2, ... per module). Module names are snake_case identifiers.
-- Database: the entities the target persists locally (a cache or the app's own data), with fields in neutral types. Leave it empty if the target keeps no local persistence.
-- Interfaces: the source's user-facing web and admin surfaces become "app" interfaces whose surfaces are screens (route = navigation path). The source's programmatic "api" interface stays an "http" interface with role "consumer": the target is a client of the existing backend, and the module implementing those surfaces is the API client.
-- Stack: frameworks and packages for the target (for Swift: leave frameworks empty unless a third-party package is clearly warranted; note SwiftUI, Foundation, Observation in guidance).
+- Modules: design the module list a good engineer would choose for the target platform, not a mirror of the source packages. Each module has an intent, depends_on, the entities it owns, the surfaces it implements, language-neutral interface operations, invariants and concrete scenarios (ids S1, S2, ... per module). Module names are snake_case identifiers.
+- Database: the entities the target persists, with fields in neutral types.
+- Interfaces: the source's user-facing surfaces re-expressed for the target (web pages stay "web" for a web target; they become "app" screens for a mobile target, route = navigation path). Leave provider empty.
+- Stack: frameworks and packages for the target.
 - Every entity must be owned by exactly one module; every surface implemented by exactly one module.
 
 Answer with JSON matching the schema.`
 
-func synthesisSchema(retarget bool) map[string]any {
+const tieredSystem = `You are the Synthesizer agent in Aspect, a pipeline that recovers a formal specification from an existing codebase and splits it into tiers.
+
+You receive the fragments the Describer wrote for every package of the SOURCE system, the inventory summary, and the target topology. Write the system level of an Aspect spec with TIERS: separate deployables in their own languages that talk only through interfaces.
+
+api_backend topology, two tiers:
+- The BACKEND tier owns the system database and serves an "api" interface. When the backend keeps the source language, it MIRRORS the source: its existing modules are listed for you by name and you must NOT redesign them. Propose only the modules to ADD to the backend so the frontend can work: typically one API module (snake_case name, intent, depends_on naming existing modules, the api surfaces it implements, operations, scenarios). Put those additions under the backend tier's modules. Also list, under interfaces, the "api" surfaces the frontend needs with provider = backend tier name; surfaces that already exist in the source keep their names, new ones get new names.
+- The FRONTEND tier (web app or mobile app, in the target language) consumes the api. Design its module list for the target platform (for an iOS app: an api client, models, feature modules with view models and SwiftUI views; for a web frontend: pages, an api client, state). Its user-facing surfaces are an "app" interface (mobile) or a "web" interface (web frontend) with provider = frontend tier name. Modules that call the backend list the api surfaces under consumes. A tier-local database (cache) is optional.
+- Tier names are snake_case (e.g. backend, mobile, web). The frontend tier depends_on the backend tier. Each tier has an intent, language and module_path.
+
+cloud_service topology, one tier:
+- One APP tier in the target language. Everything it needs from a server is an interface with provider "external" and a named service (Supabase, Firebase, a hosted REST API of the source system); the system database is external too (tier "external") and only documents the remote data model. The app may own a tier-local cache database.
+
+For both: system intent and goals are those of the source restated for the new shape; every goal names the modules accountable for it (existing backend module names or the modules you design). Every entity of a generated database is owned by exactly one module in its tier; every provided surface is implemented by exactly one module in the providing tier; external surfaces are consumed, never implemented. Module names are unique across tiers.
+
+Answer with JSON matching the schema.`
+
+func synthesisSchema(mode Mode) map[string]any {
 	str := map[string]any{"type": "string"}
 	obj := func(required []string, props map[string]any) map[string]any {
 		return map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": props}
 	}
 	arr := func(items map[string]any) map[string]any { return map[string]any{"type": "array", "items": items} }
+	nullable := func(schema map[string]any) map[string]any {
+		return map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
+	}
 	framework := obj([]string{"name", "module", "version", "purpose", "guidance"}, map[string]any{
 		"name": str, "module": str, "version": str, "purpose": str, "guidance": str,
 	})
 	stack := obj([]string{"version", "frameworks", "orm", "allowed_modules", "guidance"}, map[string]any{
-		"version": str, "frameworks": arr(framework), "orm": map[string]any{"anyOf": []any{framework, map[string]any{"type": "null"}}},
-		"allowed_modules": stringList(), "guidance": str,
+		"version": str, "frameworks": arr(framework), "orm": nullable(framework), "allowed_modules": stringList(), "guidance": str,
 	})
 	goal := obj([]string{"id", "statement", "verify", "modules"}, map[string]any{
 		"id": str, "statement": str, "verify": map[string]any{"type": "string", "enum": []string{"test", "invariant", "review"}}, "modules": stringList(),
 	})
 	frag := fragmentSchema()["properties"].(map[string]any)
-	ifaceProps := frag["interfaces"].(map[string]any)["items"].(map[string]any)
+	surface := frag["interfaces"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["surfaces"].(map[string]any)
+	iface := obj([]string{"name", "kind", "intent", "framework", "auth", "provider", "service", "surfaces"}, map[string]any{
+		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
+		"provider": str, "service": str, "surfaces": surface,
+	})
+	entity := frag["entities"].(map[string]any)["items"].(map[string]any)
+	operation := frag["operations"].(map[string]any)["items"].(map[string]any)
+	scenario := obj([]string{"id", "given", "when", "then", "goals"}, map[string]any{"id": str, "given": str, "when": str, "then": str, "goals": stringList()})
+	module := obj([]string{"name", "intent", "goals", "depends_on", "interface", "invariants", "scenarios", "constraints", "entities", "surfaces", "consumes"}, map[string]any{
+		"name": str, "intent": str, "goals": stringList(), "depends_on": stringList(), "interface": arr(operation), "invariants": stringList(),
+		"scenarios": arr(scenario), "constraints": stringList(), "entities": stringList(), "surfaces": stringList(), "consumes": stringList(),
+	})
+	dbTest := obj([]string{"engine", "dsn_env"}, map[string]any{"engine": str, "dsn_env": str})
+	database := obj([]string{"engine", "tier", "migrations", "test", "entities"}, map[string]any{
+		"engine":     map[string]any{"type": "string", "enum": []string{"postgres", "mysql", "sqlite"}},
+		"tier":       str,
+		"migrations": map[string]any{"type": "string", "enum": []string{"auto", "files"}}, "test": dbTest, "entities": arr(entity),
+	})
 	props := map[string]any{
 		"name": str, "intent": str, "constraints": stringList(), "goals": arr(goal), "stack": stack,
-		"interfaces": arr(ifaceProps), "notes": str,
+		"interfaces": arr(iface), "notes": str,
 	}
 	required := []string{"name", "intent", "constraints", "goals", "stack", "interfaces", "notes"}
-	if retarget {
-		entity := frag["entities"].(map[string]any)["items"].(map[string]any)
-		operation := frag["operations"].(map[string]any)["items"].(map[string]any)
-		scenario := obj([]string{"id", "given", "when", "then", "goals"}, map[string]any{"id": str, "given": str, "when": str, "then": str, "goals": stringList()})
-		module := obj([]string{"name", "intent", "goals", "depends_on", "interface", "invariants", "scenarios", "constraints", "entities", "surfaces"}, map[string]any{
-			"name": str, "intent": str, "goals": stringList(), "depends_on": stringList(), "interface": arr(operation), "invariants": stringList(),
-			"scenarios": arr(scenario), "constraints": stringList(), "entities": stringList(), "surfaces": stringList(),
-		})
-		dbTest := obj([]string{"engine", "dsn_env"}, map[string]any{"engine": str, "dsn_env": str})
-		database := obj([]string{"engine", "migrations", "test", "entities"}, map[string]any{
-			"engine":     map[string]any{"type": "string", "enum": []string{"postgres", "mysql", "sqlite"}},
-			"migrations": map[string]any{"type": "string", "enum": []string{"auto", "files"}}, "test": dbTest, "entities": arr(entity),
-		})
-		props["database"] = map[string]any{"anyOf": []any{database, map[string]any{"type": "null"}}}
+	switch mode {
+	case ModeRetarget:
+		props["database"] = nullable(database)
 		props["modules"] = arr(module)
 		required = append(required, "database", "modules")
+	case ModeTiered:
+		tier := obj([]string{"name", "intent", "language", "module_path", "depends_on", "stack", "database", "modules"}, map[string]any{
+			"name": str, "intent": str, "language": str, "module_path": str, "depends_on": stringList(), "stack": stack,
+			"database": nullable(database), "modules": arr(module),
+		})
+		props["database"] = nullable(database)
+		props["tiers"] = arr(tier)
+		required = append(required, "database", "tiers")
 	}
 	return obj(required, props)
 }
+
+// Mode is how the Synthesizer is asked to shape the spec.
+type Mode string
+
+const (
+	// ModeMirror keeps the source language and shape; one module per package.
+	ModeMirror Mode = "mirror"
+	// ModeRetarget re-expresses the whole system for another language as a
+	// single tier (monolith).
+	ModeRetarget Mode = "retarget"
+	// ModeTiered splits the system into tiers (api_backend) or designs a
+	// single app tier over external services (cloud_service).
+	ModeTiered Mode = "tiered"
+)
 
 // SynthesisInput is what the Synthesizer sees.
 type SynthesisInput struct {
 	Inventory *analyze.Inventory
 	Fragments []Fragment
-	// Target language; retarget mode when it differs from the inventory's.
+	Mode      Mode
+	Topology  spec.Topology
+	// Target is the language of the new system (retarget) or of the
+	// frontend tier (tiered).
 	Target string
+	// BackendLanguage is the backend tier's language in api_backend mode.
+	BackendLanguage string
+	// MirroredModules lists the backend modules that already exist when the
+	// backend mirrors the source, so additions can depend on them.
+	MirroredModules []string
 	// TargetHint is free text from the user about the target (for example
 	// "an iOS app for members; the admin stays on the web").
 	TargetHint string
 }
 
-// Synthesize writes the system level (and, in retarget mode, the modules).
+// Synthesize writes the system level (and, in retarget and tiered modes,
+// the modules or tiers).
 func (s *Synthesizer) Synthesize(ctx context.Context, in SynthesisInput) (Synthesis, llm.Response, error) {
-	retarget := in.Target != "" && in.Target != in.Inventory.Language
+	mode := in.Mode
+	if mode == "" {
+		mode = ModeMirror
+	}
 	var b strings.Builder
 	var summary strings.Builder
 	in.Inventory.Summary(&summary)
 	fmt.Fprintf(&b, "# Source inventory\n\n```\n%s```\n\n", summary.String())
-	if retarget {
-		fmt.Fprintf(&b, "# Target\n\nLanguage: %s\n", in.Target)
-		if in.TargetHint != "" {
-			fmt.Fprintf(&b, "Owner's guidance: %s\n", in.TargetHint)
+	switch mode {
+	case ModeRetarget:
+		fmt.Fprintf(&b, "# Target\n\nLanguage: %s\nTopology: monolith (single tier with its own database)\n", in.Target)
+	case ModeTiered:
+		fmt.Fprintf(&b, "# Target\n\nTopology: %s\n", in.Topology)
+		if in.Topology == spec.APIBackend {
+			fmt.Fprintf(&b, "Backend tier language: %s\nFrontend tier language: %s\n", in.BackendLanguage, in.Target)
+			if len(in.MirroredModules) > 0 {
+				fmt.Fprintf(&b, "The backend tier mirrors the source. Its existing modules (do not redesign; propose only additions): %s\n", strings.Join(in.MirroredModules, ", "))
+			}
+		} else {
+			fmt.Fprintf(&b, "App tier language: %s\n", in.Target)
 		}
-		b.WriteString("\n")
 	}
-	b.WriteString("# Fragments\n\n")
+	if in.TargetHint != "" {
+		fmt.Fprintf(&b, "Owner's guidance: %s\n", in.TargetHint)
+	}
+	b.WriteString("\n# Fragments\n\n")
 	for _, f := range in.Fragments {
 		fmt.Fprintf(&b, "```yaml\n%s```\n\n", renderYAML(f))
 	}
-	if retarget {
+	system := synthesizerSystem
+	switch mode {
+	case ModeRetarget:
+		system = retargetSystem
 		fmt.Fprintf(&b, "Write the complete spec for the %s version.\n", in.Target)
-	} else {
+	case ModeTiered:
+		system = tieredSystem
+		fmt.Fprintf(&b, "Write the %s spec.\n", in.Topology)
+	default:
 		b.WriteString("Write the system level of the spec.\n")
 	}
-	system := synthesizerSystem
-	if retarget {
-		system = retargetSystem
-	}
 	var out Synthesis
-	resp, err := complete(ctx, s.LLM, system, b.String(), synthesisSchema(retarget), &out)
+	resp, err := complete(ctx, s.LLM, system, b.String(), synthesisSchema(mode), &out)
 	if err != nil {
 		return out, resp, fmt.Errorf("synthesizer: %w", err)
 	}
