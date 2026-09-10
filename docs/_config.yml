@@ -1,0 +1,11 @@
+title: Aspect
+description: Agents that build software from a formal specification and validate that it achieves the stated goals.
+theme: jekyll-theme-minimal
+show_downloads: false
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  toc_levels: 2..3
+exclude:
+  - "*.json"
