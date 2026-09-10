@@ -46,8 +46,22 @@ func init() {
 
 // swiftSync regenerates Package.swift listing every module generated so far,
 // in plan order, with inter-target dependencies from the spec and external
-// packages from the stack section.
+// packages from the stack section. Only targets whose directory exists are
+// declared: with modules generated in parallel, a module whose tests are not
+// written yet must not break another module's build.
 func swiftSync(root string, s *spec.Spec, t *spec.Tier, modules []string) error {
+	var present []string
+	hasTests := map[string]bool{}
+	for _, m := range modules {
+		if _, err := os.Stat(filepath.Join(root, "Sources", PascalCase(m))); err != nil {
+			continue
+		}
+		present = append(present, m)
+		if _, err := os.Stat(filepath.Join(root, "Tests", PascalCase(m)+"Tests")); err == nil {
+			hasTests[m] = true
+		}
+	}
+	modules = present
 	pkgName := PascalCase(s.System.Name)
 	if t.Name != "" {
 		pkgName = PascalCase(s.System.Name + "_" + t.Name)
@@ -93,7 +107,9 @@ func swiftSync(root string, s *spec.Spec, t *spec.Tier, modules []string) error 
 		tdeps = append(tdeps, products...)
 		name := PascalCase(m)
 		fmt.Fprintf(&b, "        .target(name: %q, dependencies: [%s]),\n", name, strings.Join(tdeps, ", "))
-		fmt.Fprintf(&b, "        .testTarget(name: %q, dependencies: [%q]),\n", name+"Tests", name)
+		if hasTests[m] {
+			fmt.Fprintf(&b, "        .testTarget(name: %q, dependencies: [%q]),\n", name+"Tests", name)
+		}
 	}
 	b.WriteString("    ]\n)\n")
 	return os.WriteFile(filepath.Join(root, "Package.swift"), []byte(b.String()), 0o644)

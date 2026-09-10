@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,6 +46,10 @@ type Workspace struct {
 	// forever; the pipeline must not.
 	TestTimeout time.Duration
 	tc          Toolchain
+	// tools serialises manifest syncs and toolchain runs: modules may be
+	// generated in parallel, but `go mod tidy` or `swift build` running
+	// twice at once in one tree corrupt each other.
+	tools sync.Mutex
 }
 
 // Result of a build-and-test run.
@@ -73,6 +78,8 @@ func (w *Workspace) Sync(modules []string) error {
 	if w.tc.Sync == nil {
 		return nil
 	}
+	w.tools.Lock()
+	defer w.tools.Unlock()
 	return w.tc.Sync(w.Root, modules)
 }
 
@@ -163,6 +170,8 @@ func (w *Workspace) ReadTree() ([]File, error) {
 // output. A non-nil error means the tooling itself could not run; a failing
 // build or test is reported through Result.OK.
 func (w *Workspace) Test(ctx context.Context, module string) (Result, error) {
+	w.tools.Lock()
+	defer w.tools.Unlock()
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, w.TestTimeout)
 	defer cancel()

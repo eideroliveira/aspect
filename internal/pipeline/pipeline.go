@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eideroliveira/aspect/internal/agents"
@@ -30,6 +31,10 @@ type Options struct {
 	Log io.Writer
 	// Model is recorded in the report for provenance.
 	Model string
+	// Parallel is how many independent modules of a tier are generated at
+	// once. Model calls overlap; tool runs in one workspace stay serialised.
+	// Zero or one means sequential.
+	Parallel int
 }
 
 // ModuleReport is the outcome for one module.
@@ -116,7 +121,11 @@ func New(c llm.Client, opts Options) *Runner {
 	}
 }
 
+var logMu sync.Mutex
+
 func (r *Runner) logf(format string, args ...any) {
+	logMu.Lock()
+	defer logMu.Unlock()
 	fmt.Fprintf(r.Opts.Log, format+"\n", args...)
 }
 
@@ -165,22 +174,27 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 		if tier.Name != "" {
 			r.logf("#### tier %s (%s) -> %s", tier.Name, tier.Language, root)
 		}
-		var generated []string
+		// Every module of the tier is named to Sync; manifests only declare
+		// what exists on disk.
+		var all []string
 		for _, step := range tp.Steps {
+			all = append(all, step.Module)
+		}
+		results := make([]ModuleReport, len(tp.Steps))
+		for _, wave := range waves(tp.Steps) {
 			if ctx.Err() != nil {
 				return rep, ctx.Err()
 			}
-			r.logf("== module %s (goals %s)", step.Module, strings.Join(step.Goals, ","))
-			generated = append(generated, step.Module)
-			mr := r.runModule(ctx, s, tier, profile, step, ws, generated)
+			r.runWave(ctx, s, tier, profile, tp.Steps, wave, ws, all, results)
+		}
+		for _, mr := range results {
 			rep.Modules = append(rep.Modules, mr)
 			rep.Usage.Calls += mr.Usage.Calls
 			rep.Usage.InputTokens += mr.Usage.InputTokens
 			rep.Usage.OutputTokens += mr.Usage.OutputTokens
 			rep.Usage.CacheReadTokens += mr.Usage.CacheReadTokens
 			if mr.Error != "" {
-				failed = append(failed, step.Module)
-				r.logf("   error: %s", mr.Error)
+				failed = append(failed, mr.Module)
 			}
 		}
 	}
@@ -210,6 +224,66 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 	return rep, nil
 }
 
+// waves groups step indexes into rounds: a step joins the first round after
+// every dependency's round. Steps in one round are independent of each
+// other and may be generated concurrently. Within a round, plan order is
+// kept.
+func waves(steps []plan.Step) [][]int {
+	round := map[string]int{}
+	var out [][]int
+	for i, st := range steps {
+		w := 0
+		for _, d := range st.DependsOn {
+			if dw, ok := round[d]; ok && dw+1 > w {
+				w = dw + 1
+			}
+		}
+		round[st.Module] = w
+		for len(out) <= w {
+			out = append(out, nil)
+		}
+		out[w] = append(out[w], i)
+	}
+	return out
+}
+
+// runWave generates the steps of one round, at most Opts.Parallel at a time.
+func (r *Runner) runWave(ctx context.Context, s *spec.Spec, tier *spec.Tier, profile *lang.Profile, steps []plan.Step, wave []int, ws *workspace.Workspace, all []string, results []ModuleReport) {
+	parallel := r.Opts.Parallel
+	if parallel < 1 {
+		parallel = 1
+	}
+	if len(wave) > 1 && parallel > 1 {
+		var names []string
+		for _, i := range wave {
+			names = append(names, steps[i].Module)
+		}
+		r.logf("== wave of %d independent modules: %s", len(wave), strings.Join(names, ", "))
+	}
+	sem := make(chan struct{}, parallel)
+	var wg sync.WaitGroup
+	for _, i := range wave {
+		step := steps[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				results[i] = ModuleReport{Tier: tier.Name, Module: step.Module, Error: ctx.Err().Error()}
+				return
+			}
+			r.logf("== module %s (goals %s)", step.Module, strings.Join(step.Goals, ","))
+			mr := r.runModule(ctx, s, tier, profile, step, ws, all)
+			if mr.Error != "" {
+				r.logf("   %s: error: %s", step.Module, mr.Error)
+			}
+			results[i] = mr
+		}()
+	}
+	wg.Wait()
+}
+
 func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, profile *lang.Profile, step plan.Step, ws *workspace.Workspace, generated []string) ModuleReport {
 	start := time.Now()
 	mr := ModuleReport{Tier: tier.Name, Module: step.Module}
@@ -226,7 +300,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 	}
 
 	// 1. Code.
-	r.logf("   coder: writing implementation")
+	r.logf("   %s: coder writing implementation", step.Module)
 	code, resp, err := r.Coder.Generate(ctx, agents.CodeInput{Task: task, Dependencies: deps})
 	mr.Usage.Add(resp)
 	if err != nil {
@@ -240,14 +314,14 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 
 	// 2. Tests, derived from the spec with the code visible for identifiers.
 	// A proposal that imports a disallowed library gets one rewrite.
-	r.logf("   tester: writing tests")
+	r.logf("   %s: tester writing tests", step.Module)
 	tests, resp, err := r.Tester.Generate(ctx, agents.TestInput{Task: task, Code: code.Files, Dependencies: deps})
 	mr.Usage.Add(resp)
 	if err != nil {
 		return fail(err)
 	}
 	if vs := checkImports(profile, tests.Files, allowed); len(vs) > 0 {
-		r.logf("   tester: rewriting (disallowed imports)")
+		r.logf("   %s: tester rewriting (disallowed imports)", step.Module)
 		feedback := workspace.FormatViolations(vs, allowed)
 		tests, resp, err = r.Tester.Generate(ctx, agents.TestInput{Task: task, Code: code.Files, Dependencies: deps, Feedback: feedback, Existing: tests.Files})
 		mr.Usage.Add(resp)
@@ -274,7 +348,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 		if vs := checkImports(profile, code.Files, allowed); len(vs) > 0 {
 			result = workspace.Result{OK: false, Output: workspace.FormatViolations(vs, allowed)}
 		} else {
-			r.logf("   test run %d", mr.Iterations)
+			r.logf("   %s: test run %d", step.Module, mr.Iterations)
 			result, err = ws.Test(ctx, step.Module)
 			if err != nil {
 				return fail(err)
@@ -283,7 +357,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 		if result.OK || attempt >= r.Opts.MaxRepairs {
 			break
 		}
-		r.logf("   coder: repairing (%d of %d)", attempt+1, r.Opts.MaxRepairs)
+		r.logf("   %s: coder repairing (%d of %d)", step.Module, attempt+1, r.Opts.MaxRepairs)
 		previous := code.Files
 		code, resp, err = r.Coder.Generate(ctx, agents.CodeInput{
 			Task: task, Dependencies: deps,
@@ -310,7 +384,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 	}
 
 	// 4. Judge.
-	r.logf("   validator: judging goals")
+	r.logf("   %s: validator judging goals", step.Module)
 	verdict, resp, err := r.Validator.Judge(ctx, agents.ValidateInput{
 		Task: task, GoalIDs: step.Goals,
 		Code: code.Files, Tests: tests.Files, TestResult: result,
