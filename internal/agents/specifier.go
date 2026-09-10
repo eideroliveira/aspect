@@ -62,27 +62,30 @@ func fragmentSchema() map[string]any {
 		return map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": props}
 	}
 	arr := func(items map[string]any) map[string]any { return map[string]any{"type": "array", "items": items} }
-	field := obj([]string{"name", "type", "key", "required", "unique", "default", "intent"}, map[string]any{
-		"name": str, "type": str, "key": map[string]any{"type": "string", "enum": []string{"", "primary"}},
-		"required": map[string]any{"type": "boolean"}, "unique": map[string]any{"type": "boolean"}, "default": str, "intent": str,
+	// Kept small on purpose: the server compiles this into a grammar with a
+	// size limit. Only keys the validator needs are required; enums are
+	// kept only where a free string would produce an invalid spec.
+	boolean := map[string]any{"type": "boolean"}
+	field := obj([]string{"name", "type"}, map[string]any{
+		"name": str, "type": str, "key": str, "required": boolean, "unique": boolean, "default": str, "intent": str,
 	})
-	relation := obj([]string{"kind", "entity", "via", "intent"}, map[string]any{
+	relation := obj([]string{"kind", "entity"}, map[string]any{
 		"kind": map[string]any{"type": "string", "enum": []string{"has_one", "has_many", "belongs_to", "many_to_many"}}, "entity": str, "via": str, "intent": str,
 	})
-	entity := obj([]string{"name", "intent", "fields", "relations", "constraints"}, map[string]any{
+	entity := obj([]string{"name", "intent", "fields"}, map[string]any{
 		"name": str, "intent": str, "fields": arr(field), "relations": arr(relation), "constraints": stringList(),
 	})
-	surface := obj([]string{"name", "intent", "route", "method", "entity", "operations", "request", "response", "errors", "auth"}, map[string]any{
+	surface := obj([]string{"name", "route"}, map[string]any{
 		"name": str, "intent": str, "route": str, "method": str, "entity": str, "operations": stringList(), "request": str, "response": str, "errors": stringList(), "auth": str,
 	})
-	iface := obj([]string{"name", "kind", "intent", "framework", "auth", "surfaces"}, map[string]any{
+	iface := obj([]string{"name", "kind", "intent", "surfaces"}, map[string]any{
 		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
 		"surfaces": arr(surface),
 	})
-	operation := obj([]string{"name", "signature", "intent", "pre", "post"}, map[string]any{
+	operation := obj([]string{"name", "signature"}, map[string]any{
 		"name": str, "signature": str, "intent": str, "pre": stringList(), "post": stringList(),
 	})
-	scenario := obj([]string{"id", "given", "when", "then"}, map[string]any{"id": str, "given": str, "when": str, "then": str})
+	scenario := obj([]string{"id", "when", "then"}, map[string]any{"id": str, "given": str, "when": str, "then": str})
 	goal := obj([]string{"label", "statement", "verify"}, map[string]any{
 		"label": str, "statement": str, "verify": map[string]any{"type": "string", "enum": []string{"test", "invariant", "review"}},
 	})
@@ -191,10 +194,10 @@ func synthesisSchema(mode Mode) map[string]any {
 	nullable := func(schema map[string]any) map[string]any {
 		return map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
 	}
-	framework := obj([]string{"name", "module", "version", "purpose", "guidance"}, map[string]any{
+	framework := obj([]string{"name", "module"}, map[string]any{
 		"name": str, "module": str, "version": str, "purpose": str, "guidance": str,
 	})
-	stack := obj([]string{"version", "frameworks", "orm", "allowed_modules", "guidance"}, map[string]any{
+	stack := obj([]string{"frameworks"}, map[string]any{
 		"version": str, "frameworks": arr(framework), "orm": nullable(framework), "allowed_modules": stringList(), "guidance": str,
 	})
 	goal := obj([]string{"id", "statement", "verify", "modules"}, map[string]any{
@@ -202,19 +205,19 @@ func synthesisSchema(mode Mode) map[string]any {
 	})
 	frag := fragmentSchema()["properties"].(map[string]any)
 	surface := frag["interfaces"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["surfaces"].(map[string]any)
-	iface := obj([]string{"name", "kind", "intent", "framework", "auth", "provider", "service", "surfaces"}, map[string]any{
+	iface := obj([]string{"name", "kind", "intent", "provider", "surfaces"}, map[string]any{
 		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
 		"provider": str, "service": str, "surfaces": surface,
 	})
 	entity := frag["entities"].(map[string]any)["items"].(map[string]any)
 	operation := frag["operations"].(map[string]any)["items"].(map[string]any)
-	scenario := obj([]string{"id", "given", "when", "then", "goals"}, map[string]any{"id": str, "given": str, "when": str, "then": str, "goals": stringList()})
-	module := obj([]string{"name", "intent", "goals", "depends_on", "interface", "invariants", "scenarios", "constraints", "entities", "surfaces", "consumes"}, map[string]any{
+	scenario := obj([]string{"id", "when", "then"}, map[string]any{"id": str, "given": str, "when": str, "then": str, "goals": stringList()})
+	module := obj([]string{"name", "intent"}, map[string]any{
 		"name": str, "intent": str, "goals": stringList(), "depends_on": stringList(), "interface": arr(operation), "invariants": stringList(),
 		"scenarios": arr(scenario), "constraints": stringList(), "entities": stringList(), "surfaces": stringList(), "consumes": stringList(),
 	})
-	dbTest := obj([]string{"engine", "dsn_env"}, map[string]any{"engine": str, "dsn_env": str})
-	database := obj([]string{"engine", "tier", "migrations", "test", "entities"}, map[string]any{
+	dbTest := obj([]string{"engine"}, map[string]any{"engine": str, "dsn_env": str})
+	database := obj([]string{"engine", "entities"}, map[string]any{
 		"engine":     map[string]any{"type": "string", "enum": []string{"postgres", "mysql", "sqlite"}},
 		"tier":       str,
 		"migrations": map[string]any{"type": "string", "enum": []string{"auto", "files"}}, "test": dbTest, "entities": arr(entity),
@@ -230,7 +233,7 @@ func synthesisSchema(mode Mode) map[string]any {
 		props["modules"] = arr(module)
 		required = append(required, "database", "modules")
 	case ModeTiered:
-		tier := obj([]string{"name", "intent", "language", "module_path", "depends_on", "stack", "database", "modules"}, map[string]any{
+		tier := obj([]string{"name", "intent", "language", "modules"}, map[string]any{
 			"name": str, "intent": str, "language": str, "module_path": str, "depends_on": stringList(), "stack": stack,
 			"database": nullable(database), "modules": arr(module),
 		})
