@@ -37,6 +37,12 @@ func TestGoInventory(t *testing.T) {
 	if got := strings.Join(st.Tests, ","); got != "TestFind,TestOpen_Migrates" {
 		t.Fatalf("tests = %s", got)
 	}
+	if len(st.Docs) != 1 || st.Docs[0].Name != "CLAUDE.md" || !strings.Contains(st.Docs[0].Content, "immutable") {
+		t.Fatalf("docs = %+v", st.Docs)
+	}
+	if !strings.Contains(st.Render(0), "### Document CLAUDE.md") {
+		t.Fatal("render must include package documents")
+	}
 
 	web := inv.Package("web")
 	if got := strings.Join(web.Imports, ","); got != "example.com/app/store" {

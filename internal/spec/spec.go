@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,6 +42,21 @@ type Spec struct {
 	System  System   `yaml:"system" json:"system"`
 	Tiers   []Tier   `yaml:"tiers,omitempty" json:"tiers,omitempty"`
 	Modules []Module `yaml:"modules,omitempty" json:"modules,omitempty"`
+
+	// Dir is the directory the spec was loaded from; brief paths resolve
+	// against it. Empty for specs parsed from memory.
+	Dir string `yaml:"-" json:"-"`
+}
+
+// Brief is a sidecar document: a longer, free-form description of what a
+// system, tier or module must be, kept in its own file next to the spec so
+// it can run to pages without crowding the YAML. Every agent working on the
+// owner sees the whole text.
+type Brief struct {
+	// Path is relative to the spec file's directory.
+	Path string `yaml:"brief,omitempty" json:"brief,omitempty"`
+	// Text is the file's content, filled by Load.
+	Text string `yaml:"-" json:"-"`
 }
 
 // Topology names the shape of the solution.
@@ -71,6 +88,7 @@ type Tier struct {
 	// owned by the tier named in Database.Tier.
 	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
 	Modules  []Module  `yaml:"modules" json:"modules"`
+	Brief    `yaml:",inline" json:",inline"`
 }
 
 // System describes the whole program the agents must produce.
@@ -94,6 +112,7 @@ type System struct {
 	// Source records where an imported spec came from. Absent for specs
 	// written by hand.
 	Source *Source `yaml:"source,omitempty" json:"source,omitempty"`
+	Brief  `yaml:",inline" json:",inline"`
 }
 
 // Source is the provenance of a spec produced by `aspect import`.
@@ -269,6 +288,7 @@ type Module struct {
 	// Consumes lists surfaces this module is a client of, served by another
 	// tier or an external service, in the same notation.
 	Consumes []string `yaml:"consumes,omitempty" json:"consumes,omitempty"`
+	Brief    `yaml:",inline" json:",inline"`
 }
 
 // Operation is one exported function or method the module must expose, with
@@ -291,14 +311,57 @@ type Scenario struct {
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty"`
 }
 
-// Load reads and parses a spec file. It does not validate semantics; call
-// Validate for that.
+// Load reads and parses a spec file and its brief sidecars. It does not
+// validate semantics; call Validate for that.
 func Load(path string) (*Spec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return Parse(data)
+	s, err := Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	s.Dir = filepath.Dir(path)
+	if err := s.LoadBriefs(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Briefs returns every brief in the spec (system, tiers, modules) with the
+// name of its owner, for loading and validation.
+func (s *Spec) Briefs() map[string]*Brief {
+	out := map[string]*Brief{"system": &s.System.Brief}
+	for i := range s.Tiers {
+		out["tier "+s.Tiers[i].Name] = &s.Tiers[i].Brief
+	}
+	for _, m := range s.AllModules() {
+		out["module "+m.Name] = &m.Brief
+	}
+	return out
+}
+
+// LoadBriefs reads every brief file relative to Dir. Missing files are
+// reported together so the user fixes them in one pass.
+func (s *Spec) LoadBriefs() error {
+	var missing []string
+	for owner, b := range s.Briefs() {
+		if b.Path == "" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.Dir, b.Path))
+		if err != nil {
+			missing = append(missing, fmt.Sprintf("%s: %s (%v)", owner, b.Path, err))
+			continue
+		}
+		b.Text = string(data)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("brief files not found:\n  %s", strings.Join(missing, "\n  "))
+	}
+	return nil
 }
 
 // Parse decodes YAML into a Spec and applies defaults.

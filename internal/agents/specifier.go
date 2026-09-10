@@ -52,6 +52,8 @@ Operations: the package's exported API that other packages call, as language-neu
 
 Scenarios: derive from the tests (test names are listed) and from obvious happy and error paths. Use concrete values. Ids are S1, S2, ...
 
+When the package carries documents (README, CLAUDE.md, design notes), they are the owner's own words: take intent, invariants and constraints from them before inferring from code, and quote their rules as invariants.
+
 Do not invent behaviour the evidence does not support; put uncertainties in notes. Answer with JSON matching the schema.`
 
 func fragmentSchema() map[string]any {

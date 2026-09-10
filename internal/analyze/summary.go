@@ -101,6 +101,9 @@ func (p *Package) Render(budget int) string {
 	if len(p.Tests) > 0 {
 		fmt.Fprintf(&b, "### Tests (%d)\n\n%s\n\n", len(p.Tests), strings.Join(p.Tests, ", "))
 	}
+	for _, d := range p.Docs {
+		fmt.Fprintf(&b, "### Document %s (the owner's own description; trust it over inference)\n\n%s\n\n", d.Name, strings.TrimSpace(d.Content))
+	}
 	s := b.String()
 	if budget > 0 && len(s) > budget {
 		s = s[:budget] + "\n…(inventory truncated to fit the prompt budget)\n"

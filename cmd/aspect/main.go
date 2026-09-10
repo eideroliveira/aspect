@@ -288,8 +288,11 @@ func runImport(dir string, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := importer.Write(*out, res.Spec, res.Warnings); err != nil {
+	if err := importer.Write(*out, res.Spec, res.Warnings, res.Briefs); err != nil {
 		return err
+	}
+	if len(res.Briefs) > 0 {
+		fmt.Fprintf(os.Stderr, "wrote %d brief(s) under %s\n", len(res.Briefs), filepath.Join(filepath.Dir(*out), "briefs"))
 	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)

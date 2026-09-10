@@ -37,6 +37,10 @@ A spec is a YAML document with three layers:
 | **Database** | engine, migration policy, test database, entities with fields and relations | modules that own entities |
 | **Interfaces** | http, web, cli or grpc surfaces bound to entities and a framework | modules that implement surfaces |
 
+A module (or a tier, or the system) may point at a **brief**: a sidecar
+Markdown file with the longer story, domain rules and seams that would
+crowd the YAML. Every agent working on that module reads it whole.
+
 Goals are the contract. Every goal must be owned by at least one module or
 scenario, every entity by exactly one module, every surface implemented by
 exactly one module, or validation refuses the spec: an orphan could never be
@@ -127,7 +131,10 @@ stack and the interfaces; in retarget mode (target language differs) it also
 designs the module list for the target, turning web pages into app screens
 and keeping the backend API as an interface the app consumes.
 
-Assembly is deterministic again, records provenance under `system.source`,
+Markdown documents found in a package directory (README.md, CLAUDE.md,
+design notes) become `briefs/<module>.md` next to the recovered spec and are
+referenced as the module's brief, so the owner's own rules travel with the
+spec. Assembly is deterministic again, records provenance under `system.source`,
 and never fails: whatever it cannot reconcile becomes a warning at the top of
 the YAML. Fragments are cached under `.aspect-cache/`, so an interrupted or
 re-run import only pays for packages not yet described. Review the recovered

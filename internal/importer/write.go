@@ -3,6 +3,7 @@ package importer
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -33,11 +34,21 @@ func Marshal(s *spec.Spec, warnings []string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// Write stores the spec at path.
-func Write(path string, s *spec.Spec, warnings []string) error {
+// Write stores the spec at path and its brief sidecars next to it.
+func Write(path string, s *spec.Spec, warnings []string, briefs map[string]string) error {
 	b, err := Marshal(s, warnings)
 	if err != nil {
 		return err
+	}
+	dir := filepath.Dir(path)
+	for rel, content := range briefs {
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(path, b, 0o644)
 }

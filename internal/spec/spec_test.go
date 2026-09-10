@@ -1,6 +1,8 @@
 package spec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -407,5 +409,59 @@ func TestSingleTierSpecIsAnImplicitTier(t *testing.T) {
 	}
 	if s.TierOf("stock") == nil || s.TierOf("stock").Name != "" {
 		t.Fatal("TierOf must find modules of the implicit tier")
+	}
+}
+
+func TestLoadReadsBriefSidecars(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "briefs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "briefs", "greet.md"), []byte("# Greet\n\nAlways greet in the person's language.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `
+aspect: 1
+system:
+  name: g
+  intent: greet
+  brief: briefs/system.md
+  module_path: example.com/g
+  goals: [{id: G1, statement: x}]
+modules:
+  - name: greet
+    intent: greet
+    goals: [G1]
+    brief: briefs/greet.md
+    scenarios: [{id: S1, when: a, then: b}]
+`
+	path := filepath.Join(dir, "aspect.yaml")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "system: briefs/system.md") {
+		t.Fatalf("a missing brief must fail loading with its owner named, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "briefs", "system.md"), []byte("The whole system brief."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.Module("greet").Brief.Text, "person's language") || s.System.Brief.Text != "The whole system brief." {
+		t.Fatalf("briefs not loaded: %+v / %+v", s.Module("greet").Brief, s.System.Brief)
+	}
+	if issues := Validate(s); issues.HasErrors() || len(issues) != 0 {
+		t.Fatalf("loaded briefs must validate cleanly: %v", issues)
+	}
+	// Parsed from memory, the same spec warns that briefs are not loaded.
+	mem, _ := Parse([]byte(src))
+	if text := join(Validate(mem)); !strings.Contains(text, "module greet.brief") || !strings.Contains(text, "was not loaded") {
+		t.Fatalf("want not-loaded warnings, got:\n%s", text)
+	}
+	mem.Modules[0].Brief.Path = "../escape.md"
+	if text := join(Validate(mem)); !strings.Contains(text, "must be a relative path inside") {
+		t.Fatalf("want path escape error, got:\n%s", text)
 	}
 }
