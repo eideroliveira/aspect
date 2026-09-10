@@ -84,6 +84,26 @@ func renderContext(t Task) string {
 		fmt.Fprintf(&b, "## System brief (%s)\n\n%s\n\n", s.Brief.Path, text)
 	}
 
+	if len(s.Dependencies) > 0 {
+		type depView struct {
+			Name       string   `yaml:"name"`
+			Intent     string   `yaml:"intent,omitempty"`
+			Spec       string   `yaml:"spec"`
+			Interfaces []string `yaml:"interfaces,omitempty"`
+		}
+		var views []depView
+		for _, d := range s.Dependencies {
+			v := depView{d.Name, d.Intent, d.Spec, nil}
+			if dep, ok := t.Spec.Deps[d.Name]; ok {
+				for _, i := range dep.System.Interfaces {
+					v.Interfaces = append(v.Interfaces, fmt.Sprintf("%s (%s)", i.Name, i.Kind))
+				}
+			}
+			views = append(views, v)
+		}
+		fmt.Fprintf(&b, "# System dependencies\n\nOther systems this one consumes interfaces of, referenced as <system>/<interface>.<surface>. They are built and run elsewhere; this system only calls them.\n\n```yaml\n%s```\n\n", renderYAML(views))
+	}
+
 	if len(t.Spec.Tiers) > 0 {
 		type tierView struct {
 			Name      string   `yaml:"name"`
@@ -182,6 +202,7 @@ func renderModule(t Task, heading string) string {
 		fmt.Fprintf(&b, "## Entities owned by this module\n\nThis module defines these persistent types and is the only writer of them.\n\n```yaml\n%s```\n\n", renderYAML(ents))
 	}
 	type surfaceView struct {
+		System    string       `yaml:"system,omitempty"`
 		Interface string       `yaml:"interface"`
 		Kind      string       `yaml:"kind"`
 		Provider  string       `yaml:"provider,omitempty"`
@@ -194,7 +215,7 @@ func renderModule(t Task, heading string) string {
 		var views []surfaceView
 		frameworks := map[string]bool{}
 		for _, r := range refs {
-			views = append(views, surfaceView{r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, r.Interface.Framework, r.Interface.Auth, *r.Surface})
+			views = append(views, surfaceView{"", r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, r.Interface.Framework, r.Interface.Auth, *r.Surface})
 			if r.Interface.Framework != "" {
 				frameworks[r.Interface.Framework] = true
 			}
@@ -211,9 +232,9 @@ func renderModule(t Task, heading string) string {
 	if refs, _ := t.Spec.ResolveSurfaces(m.Consumes); len(refs) > 0 {
 		var views []surfaceView
 		for _, r := range refs {
-			views = append(views, surfaceView{r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, "", r.Interface.Auth, *r.Surface})
+			views = append(views, surfaceView{r.System, r.Interface.Name, r.Interface.Kind, r.Interface.Provider, r.Interface.Service, "", r.Interface.Auth, *r.Surface})
 		}
-		fmt.Fprintf(&b, "## Surfaces this module consumes\n\nThis module is a client of these surfaces. They are served by another tier or by an external service, never by code in this tier: implement a client against the contract below, take the base address from configuration, and represent every listed error.\n\n```yaml\n%s```\n\n", renderYAML(views))
+		fmt.Fprintf(&b, "## Surfaces this module consumes\n\nThis module is a client of these surfaces. They are served by another tier, by another system (see system), or by an external service, never by code in this tier: implement a client against the contract below, take the base address from configuration, and represent every listed error.\n\n```yaml\n%s```\n\n", renderYAML(views))
 	}
 	return b.String()
 }

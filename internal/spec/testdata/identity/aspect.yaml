@@ -1,0 +1,20 @@
+aspect: 1
+system:
+  name: identity
+  intent: Know who a person is across every product.
+  module_path: example.com/identity
+  goals:
+    - {id: G1, statement: a person can log in, verify: test}
+  interfaces:
+    - name: api
+      kind: http
+      intent: What products call.
+      surfaces:
+        - {name: login, method: POST, route: /login, request: '{"email", "password"}', response: '{"token"}', errors: ["401 bad credentials"]}
+        - {name: whoami, method: GET, route: /me, response: '{"id", "email"}'}
+modules:
+  - name: auth
+    intent: Issue and check tokens.
+    goals: [G1]
+    surfaces: [api]
+    scenarios: [{id: S1, when: POST /login, then: a token}]

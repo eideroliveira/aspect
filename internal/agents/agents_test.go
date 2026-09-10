@@ -176,3 +176,17 @@ func TestValidatorFillsMissingGoalsAsUnverifiable(t *testing.T) {
 		t.Error("validator prompt must state the real test outcome and the module's ownership")
 	}
 }
+
+func TestRenderShowsSystemDependencies(t *testing.T) {
+	s, err := spec.Load("../spec/testdata/split/aspect.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := lang.For("go")
+	prompt := renderContext(Task{Spec: s, Module: s.Module("orders"), Lang: p}) + renderModule(Task{Spec: s, Module: s.Module("orders"), Lang: p}, "Module")
+	for _, want := range []string{"# System dependencies", "name: identity", "api (http)", "Surfaces this module consumes", "system: identity", "route: /me"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+}

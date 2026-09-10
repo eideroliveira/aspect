@@ -21,8 +21,10 @@ Contents
 12. [Validation rules](#12-validation-rules)
 13. [How agents read the spec](#13-how-agents-read-the-spec)
 14. [Language profiles](#14-language-profiles)
-15. [Writing good specs](#15-writing-good-specs)
-16. [Complete skeleton](#16-complete-skeleton)
+15. [Splitting a spec across files](#15-splitting-a-spec-across-files)
+16. [System dependencies](#16-system-dependencies)
+17. [Writing good specs](#17-writing-good-specs)
+18. [Complete skeleton](#18-complete-skeleton)
 
 ---
 
@@ -92,7 +94,7 @@ Names of the system, tiers, modules, interfaces and surfaces match
 | module | module name | `depends_on: [catalog]` |
 | tier | tier name, or `external` | `provider: backend`, `tier: external` |
 | entity | entity name | `entities: [Product]` |
-| surface | `interface.surface`, or `interface` for all of its surfaces | `surfaces: [api.reserve, app]` |
+| surface | `interface.surface`, or `interface` for all of its surfaces; `system/…` for a dependency's | `surfaces: [api.reserve, app]`, `consumes: [identity/api.login]` |
 
 ### Signatures
 
@@ -477,7 +479,7 @@ modules:
 | `depends_on` | module names | no | Same-tier modules whose code this one imports; acyclic |
 | `entities` | entity names | no | Entities this module owns (defines and writes) |
 | `surfaces` | surface refs | no | Surfaces this module implements; only for its own tier's interfaces |
-| `consumes` | surface refs | no | Surfaces this module calls in other tiers or external services |
+| `consumes` | surface refs | no | Surfaces this module calls in other tiers, external services, or system dependencies (`system/interface.surface`) |
 | `interface` | list of Operation | no | Exported operations other modules call |
 | `invariants` | list of text | no | Properties that hold in every state |
 | `scenarios` | list of Scenario | no | Given/When/Then examples |
@@ -552,6 +554,8 @@ Structure
 - `aspect` is `1`; `system.name` and `system.intent` are set; at least one goal.
 - `modules` and `tiers` are exclusive. Without tiers, `system.language` is supported and `system.module_path` is set, and there is at least one module.
 - Every stack framework has `name` (unique) and `module`; the ORM has `module`; `allowed_modules` entries are non-empty.
+- Every dependency has a unique identifier `name` (not a tier name, not `external`) and a relative `spec`; a dependency's spec must itself validate; dependency and include cycles fail the load.
+- A surface of a dependency can be consumed, never implemented.
 
 Identifiers and references
 - Names match their pattern (§3); goal ids, entity names (across all databases), interface names, tier names, and module names (across all tiers) are unique; scenario ids are unique per module; surface names are unique per interface.
@@ -589,6 +593,7 @@ Topology
 - An external interface without a `service` name; an external surface nobody consumes.
 - `system.language`, `module_path` or `stack` set alongside `tiers`; a `tier` field on a tier-local database; a single tier written under `tiers`.
 - A `brief` that was not loaded (spec parsed from memory) or is empty. A brief path that is absolute or escapes the spec's directory is an error.
+- A dependency that was not loaded (spec parsed from memory).
 - `operations` listed on a surface with no `entity`.
 - A declared `monolith` with several tiers or with external providers.
 
@@ -628,7 +633,75 @@ of each tier.
 
 ---
 
-## 15. Writing good specs
+## 15. Splitting a spec across files
+
+A spec can be spread over a directory. Anywhere a list is expected, an
+entry may pull in another file:
+
+```yaml
+system:
+  database:
+    file: database.yaml            # a mapping in place of a mapping
+  interfaces:
+    - file: interfaces/api.yaml    # one entry (a mapping) or several (a list)
+    - file: interfaces/admin.yaml
+modules:
+  - dir: modules                   # every *.yaml in the directory, by name
+  - file: extra/reporting.yaml
+```
+
+| Directive | Where | Effect |
+|---|---|---|
+| `- file: path` | in a list | the file's content is spliced in: a list contributes all its entries, a mapping one entry |
+| `- dir: path/` | in a list | every `*.yaml` and `*.yml` in the directory, sorted by file name, each spliced as above |
+| `key: {file: path}` | in place of a mapping | the file's mapping replaces the directive |
+
+Paths are relative to the file that contains the directive; included files
+may include further files. Names sort, so `10_catalog.yaml` comes before
+`20_api.yaml` and dependency order inside a directory is under your
+control. `brief` and dependency `spec` paths written inside an included
+file are relative to that file and are rebased automatically. Cycles and
+missing files fail the load. `aspect expand spec.yaml` prints the
+assembled document, which is what the loader validates, so unknown keys
+in fragments are still caught. See
+[examples/modular_shop](https://github.com/eideroliveira/aspect/blob/main/examples/modular_shop/aspect.yaml).
+
+## 16. System dependencies
+
+A system may consume interfaces of other Aspect systems. They are declared
+with the path of their own spec and referenced in surface notation with
+the system name as prefix:
+
+```yaml
+system:
+  dependencies:
+    - name: identity
+      spec: ../identity/aspect.yaml
+      intent: The shared login service; the shop trusts its tokens.
+modules:
+  - name: api
+    consumes: [identity/api.whoami, identity/api]   # one surface, or all of an interface
+```
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | identifier | yes | Prefix used in references; unique, not a tier name, not `external` |
+| `spec` | relative path | yes | The dependency's spec, loaded and validated with this one |
+| `intent` | text | no | Why this system relies on it |
+
+The dependency's spec is loaded with this one (includes, briefs and its
+own dependencies included) and must validate: a system cannot depend on
+one that does not hold together. Dependency cycles fail the load. A
+dependency is never built by this system's run; its surfaces can only be
+consumed, and agents see their full contracts with the system named. This
+is how a family of systems shares one identity service or one catalog
+without any of them copying the other's interface definitions.
+
+Compared with `provider: external`, a dependency has a checked contract:
+references into it are validated against the real spec, and the contract
+shown to agents is the one the other system is built from.
+
+## 17. Writing good specs
 
 - **Intent is for judgement, not generation.** Write it the way you would
   explain the module to a new colleague. Vague intent yields vague verdicts.
@@ -650,7 +723,7 @@ of each tier.
 
 ---
 
-## 16. Complete skeleton
+## 18. Complete skeleton
 
 Every key of the format in one place. Optional keys are marked `#opt`.
 
@@ -708,6 +781,8 @@ system:
   source:                                               #opt, written by import
     {language: string, repository: string, commit: string, imported_at: string, frameworks: [string]}
   brief: relative/path.md                               #opt
+  dependencies:                                         #opt, other Aspect systems
+    - {name: identifier, spec: relative/aspect.yaml, intent: text}
 
 modules:                                                # single-tier
   - &module
@@ -717,7 +792,7 @@ modules:                                                # single-tier
     depends_on: [module-name]                           #opt, same tier
     entities: [Entity]                                  #opt
     surfaces: [interface.surface | interface]           #opt, own tier
-    consumes: [interface.surface | interface]           #opt, other tiers / external
+    consumes: [interface.surface | interface | system/interface.surface]   #opt
     interface:                                          #opt
       - {name: string, signature: string, intent: text, pre: [text], post: [text]}
     invariants: [text]                                  #opt

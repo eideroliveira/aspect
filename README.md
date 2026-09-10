@@ -37,6 +37,13 @@ A spec is a YAML document with three layers:
 | **Database** | engine, migration policy, test database, entities with fields and relations | modules that own entities |
 | **Interfaces** | http, web, cli or grpc surfaces bound to entities and a framework | modules that implement surfaces |
 
+A spec can be **split across files** with `file` and `dir` includes, and
+can **depend on other Aspect systems**: `system.dependencies` names their
+specs, and modules consume their surfaces as `identity/api.login` with the
+contract checked against the other system's real spec. See
+[examples/modular_shop](examples/modular_shop/aspect.yaml), which depends on
+[examples/identity](examples/identity/aspect.yaml).
+
 A module (or a tier, or the system) may point at a **brief**: a sidecar
 Markdown file with the longer story, domain rules and seams that would
 crowd the YAML. Every agent working on that module reads it whole.
@@ -86,6 +93,7 @@ it rather than silently bending the code to the test.
 go install github.com/eideroliveira/aspect/cmd/aspect@latest
 
 aspect validate examples/inventory/aspect.yaml   # every issue in one pass
+aspect expand   examples/modular_shop/aspect.yaml # a split spec, assembled
 aspect plan     examples/inventory/aspect.yaml   # build order and per-step work
 aspect run      examples/inventory/aspect.yaml -out ./out
 ```

@@ -1,0 +1,5 @@
+name: api
+kind: http
+intent: The shop API.
+surfaces:
+  - {name: reserve, method: POST, route: /reserve}

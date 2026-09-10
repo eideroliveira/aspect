@@ -1,0 +1,10 @@
+- name: orders
+  intent: Reserve for logged-in people.
+  goals: [G1]
+  depends_on: [catalog]
+  surfaces: [api.reserve]
+  consumes: [identity/api.whoami]
+  scenarios: [{id: S1, when: reserve with a token, then: 201}]
+- name: audit
+  intent: Keep the trail.
+  scenarios: [{id: S1, when: anything, then: logged}]

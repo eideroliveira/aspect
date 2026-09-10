@@ -120,7 +120,35 @@ func Validate(s *Spec) Issues {
 	validateModules(c, x)
 	validateTopology(c, x)
 	validateBriefs(c, s)
+	validateDependencies(c, s)
 	return c.issues
+}
+
+func validateDependencies(c *collector, s *Spec) {
+	seen := map[string]bool{}
+	for i, d := range s.System.Dependencies {
+		p := fmt.Sprintf("system.dependencies[%d]", i)
+		if d.Name == "" {
+			c.add(Error, p+".name", "is required")
+		} else if !identRe.MatchString(d.Name) {
+			c.add(Error, p+".name", "%q must match %s", d.Name, identRe)
+		} else if d.Name == External {
+			c.add(Error, p+".name", "%q is reserved", External)
+		} else if seen[d.Name] {
+			c.add(Error, p+".name", "duplicate dependency %q", d.Name)
+		} else if s.Tier(d.Name) != nil && d.Name != "" {
+			c.add(Error, p+".name", "%q is also a tier name", d.Name)
+		}
+		seen[d.Name] = true
+		if d.Spec == "" {
+			c.add(Error, p+".spec", "is required (path of the dependency's spec)")
+		} else if filepath.IsAbs(d.Spec) {
+			c.add(Error, p+".spec", "%q must be a relative path", d.Spec)
+		}
+		if _, ok := s.Deps[d.Name]; !ok && d.Spec != "" {
+			c.add(Warning, p, "dependency %q was not loaded (parsed from memory); references into it cannot be checked", d.Name)
+		}
+	}
 }
 
 func validateBriefs(c *collector, s *Spec) {
@@ -564,6 +592,10 @@ func validateModules(c *collector, x *ctx) {
 			}
 			for _, r := range refs {
 				id := r.ID()
+				if r.System != "" {
+					c.add(Error, p+".surfaces", "surface %q belongs to system %q; consume it instead of implementing it", id, r.System)
+					continue
+				}
 				switch provider := x.surfaceProvider[id]; {
 				case provider == External:
 					c.add(Error, p+".surfaces", "surface %q is served by an external service; consume it instead of implementing it", id)
@@ -579,6 +611,9 @@ func validateModules(c *collector, x *ctx) {
 			}
 			for _, r := range refs {
 				id := r.ID()
+				if r.System != "" {
+					continue // served by another system; nothing to cross-check here
+				}
 				if provider := x.surfaceProvider[id]; provider != External && provider == t.Name {
 					c.add(Error, p+".consumes", "surface %q is provided by this tier; depend on the implementing module instead of consuming", id)
 					continue

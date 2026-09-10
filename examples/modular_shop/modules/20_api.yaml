@@ -1,0 +1,9 @@
+- name: api
+  intent: Verify the caller with identity, then reserve through catalog.
+  goals: [G1]
+  depends_on: [catalog]
+  surfaces: [api]
+  consumes: [identity/api.whoami]
+  scenarios:
+    - {id: S1, given: identity answers 401 for the token, when: POST /api/reservations, then: 401 and nothing is reserved, goals: [G1]}
+    - {id: S2, given: identity answers ana's id and product A has 2, when: "POST /api/reservations {A, 1}", then: 201 with available 1 and the reservation carries ana's id, goals: [G1]}
