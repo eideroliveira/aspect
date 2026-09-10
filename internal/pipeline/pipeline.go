@@ -214,7 +214,7 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 	}
 
 	rep.Finished = time.Now()
-	rep.Goals = summarise(s, rep.Modules, rep.SystemVerdict, rep.SystemVerdictError != "")
+	rep.Goals = Summarise(s, rep.Modules, rep.SystemVerdict, rep.SystemVerdictError != "")
 	if rep.SystemVerdictError != "" {
 		failed = append(failed, "system")
 	}
@@ -453,9 +453,9 @@ func tail(s string, n int) string {
 
 var statusRank = map[agents.GoalStatus]int{agents.Achieved: 0, agents.Partial: 1, agents.Unverifiable: 2, agents.NotAchieved: 3}
 
-// summarise rolls goal verdicts up: a goal is only as achieved as its weakest
+// Summarise rolls goal verdicts up: a goal is only as achieved as its weakest
 // owning module, and never better than the system pass judged it.
-func summarise(s *spec.Spec, mods []ModuleReport, system agents.SystemVerdict, systemFailed bool) []GoalSummary {
+func Summarise(s *spec.Spec, mods []ModuleReport, system agents.SystemVerdict, systemFailed bool) []GoalSummary {
 	rank := statusRank
 	bySystem := map[string]agents.GoalVerdict{}
 	for _, g := range system.Goals {

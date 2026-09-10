@@ -13,9 +13,10 @@ whether the result achieves the spec's stated goals. Go module
 - `internal/agents` — Coder, Tester, Validator (build) and Describer, Synthesizer (import). Pure functions of their input plus a client; never touch disk.
 - `internal/analyze` — deterministic Go inventory (parser only, no type checking).
 - `internal/importer` — import orchestration, fragment cache, deterministic assembly, YAML writer.
+- `internal/drift` — re-validate existing code against a spec: presence, orphans, tests, verdicts vs baseline.
 - `internal/workspace` — writes proposed files (path-guarded) and runs the profile's toolchain steps.
 - `internal/pipeline` — orchestration and the report.
-- `cmd/aspect` — CLI: `validate`, `plan`, `run`, `inventory`, `import`.
+- `cmd/aspect` — CLI: `validate`, `plan`, `run`, `drift`, `inventory`, `import`.
 - `examples/` — reference specs; CI validates them.
 - `docs/` — architecture and spec format.
 
