@@ -1,0 +1,17 @@
+engine: postgres
+entities:
+  - name: Product
+    intent: A sellable item with its stock.
+    fields:
+      - {name: ID, type: int64, key: primary}
+      - {name: SKU, type: string, required: true, unique: true}
+      - {name: Available, type: int, default: "0"}
+  - name: Reservation
+    intent: Goods held for a person identity identified.
+    fields:
+      - {name: ID, type: int64, key: primary}
+      - {name: ProductID, type: int64, required: true}
+      - {name: PersonID, type: uuid, required: true, intent: the id identity returned from whoami}
+      - {name: Qty, type: int, required: true}
+    relations:
+      - {kind: belongs_to, entity: Product, via: ProductID}

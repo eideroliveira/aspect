@@ -26,6 +26,7 @@ const usage = `aspect - build software from a formal specification with a team o
 
 Usage:
   aspect validate <spec.yaml>          check the spec and report every issue
+  aspect expand   <spec.yaml>          print the spec with every include resolved
   aspect plan     <spec.yaml>          show the module build order and what each step needs
   aspect run      <spec.yaml> [flags]  generate code and tests, run them, validate goals
   aspect drift    <spec.yaml> [flags]  re-validate existing code against the spec without regenerating
@@ -85,6 +86,12 @@ func main() {
 	switch cmd {
 	case "validate":
 		err = runValidate(path)
+	case "expand":
+		var b []byte
+		b, err = spec.Expand(path)
+		if err == nil {
+			os.Stdout.Write(b)
+		}
 	case "plan":
 		err = runPlan(path)
 	case "run":
@@ -129,7 +136,11 @@ func runValidate(path string) error {
 	for _, t := range s.EffectiveTiers() {
 		langs = append(langs, t.Language)
 	}
-	fmt.Printf("ok: %s (%s, %s, %d modules, %d goals, %d warnings)\n", s.System.Name, s.EffectiveTopology(), strings.Join(langs, "+"), len(s.AllModules()), len(s.System.Goals), len(issues))
+	deps := ""
+	if n := len(s.Deps); n > 0 {
+		deps = fmt.Sprintf(", %d dependenc%s", n, map[bool]string{true: "y", false: "ies"}[n == 1])
+	}
+	fmt.Printf("ok: %s (%s, %s, %d modules, %d goals%s, %d warnings)\n", s.System.Name, s.EffectiveTopology(), strings.Join(langs, "+"), len(s.AllModules()), len(s.System.Goals), deps, len(issues))
 	return nil
 }
 

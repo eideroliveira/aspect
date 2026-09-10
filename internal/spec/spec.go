@@ -46,6 +46,20 @@ type Spec struct {
 	// Dir is the directory the spec was loaded from; brief paths resolve
 	// against it. Empty for specs parsed from memory.
 	Dir string `yaml:"-" json:"-"`
+	// Path is the file the spec was loaded from.
+	Path string `yaml:"-" json:"-"`
+	// Deps holds the loaded specs of System.Dependencies, by name.
+	Deps map[string]*Spec `yaml:"-" json:"-"`
+}
+
+// Dependency is another Aspect system this one consumes interfaces of. It
+// is described by its own spec, loaded and validated with this one, and
+// never built by this system's run.
+type Dependency struct {
+	Name string `yaml:"name" json:"name"`
+	// Spec is the path of the dependency's spec, relative to this spec.
+	Spec   string `yaml:"spec" json:"spec"`
+	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
 }
 
 // Brief is a sidecar document: a longer, free-form description of what a
@@ -112,7 +126,10 @@ type System struct {
 	// Source records where an imported spec came from. Absent for specs
 	// written by hand.
 	Source *Source `yaml:"source,omitempty" json:"source,omitempty"`
-	Brief  `yaml:",inline" json:",inline"`
+	// Dependencies are other Aspect systems whose interfaces this one
+	// consumes, referenced in surface notation as "<name>/<interface>.<surface>".
+	Dependencies []Dependency `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
+	Brief        `yaml:",inline" json:",inline"`
 }
 
 // Source is the provenance of a spec produced by `aspect import`.
@@ -311,10 +328,25 @@ type Scenario struct {
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty"`
 }
 
-// Load reads and parses a spec file and its brief sidecars. It does not
-// validate semantics; call Validate for that.
+// Load reads a spec file, resolves its includes, parses it, and loads its
+// brief sidecars and system dependencies. It does not validate semantics;
+// call Validate for that.
 func Load(path string) (*Spec, error) {
-	data, err := os.ReadFile(path)
+	return load(path, map[string]bool{})
+}
+
+func load(path string, loading map[string]bool) (*Spec, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if loading[abs] {
+		return nil, fmt.Errorf("dependency cycle through %s", path)
+	}
+	loading[abs] = true
+	defer delete(loading, abs)
+
+	data, err := Expand(path)
 	if err != nil {
 		return nil, err
 	}
@@ -323,10 +355,44 @@ func Load(path string) (*Spec, error) {
 		return nil, err
 	}
 	s.Dir = filepath.Dir(path)
+	s.Path = path
 	if err := s.LoadBriefs(); err != nil {
 		return nil, err
 	}
+	if err := s.loadDependencies(loading); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// loadDependencies loads and validates every system dependency. A
+// dependency with validation errors is an error here: this spec cannot
+// consume interfaces of a system that does not hold together.
+func (s *Spec) loadDependencies(loading map[string]bool) error {
+	for i := range s.System.Dependencies {
+		d := &s.System.Dependencies[i]
+		if d.Spec == "" {
+			continue
+		}
+		dep, err := load(filepath.Join(s.Dir, d.Spec), loading)
+		if err != nil {
+			return fmt.Errorf("dependency %s: %w", d.Name, err)
+		}
+		if issues := Validate(dep); issues.HasErrors() {
+			var lines []string
+			for _, i := range issues {
+				if i.Severity == Error {
+					lines = append(lines, i.String())
+				}
+			}
+			return fmt.Errorf("dependency %s (%s) has errors:\n  %s", d.Name, d.Spec, strings.Join(lines, "\n  "))
+		}
+		if s.Deps == nil {
+			s.Deps = map[string]*Spec{}
+		}
+		s.Deps[d.Name] = dep
+	}
+	return nil
 }
 
 // Briefs returns every brief in the spec (system, tiers, modules) with the
@@ -581,38 +647,73 @@ func (s *Spec) Interface(name string) *Interface {
 	return nil
 }
 
-// SurfaceRef is a resolved "interface.surface" reference.
+// SurfaceRef is a resolved "interface.surface" reference, possibly into a
+// system dependency ("<system>/interface.surface").
 type SurfaceRef struct {
+	// System is the dependency name, empty for this spec's own interfaces.
+	System    string
 	Interface *Interface
 	Surface   *Surface
 }
 
-// ID is the canonical "interface.surface" form.
-func (r SurfaceRef) ID() string { return r.Interface.Name + "." + r.Surface.Name }
+// ID is the canonical form: "interface.surface", or
+// "system/interface.surface" for a dependency's surface.
+func (r SurfaceRef) ID() string {
+	id := r.Interface.Name + "." + r.Surface.Name
+	if r.System != "" {
+		return r.System + "/" + id
+	}
+	return id
+}
 
-// ResolveSurfaces expands a module's Surfaces list. A bare interface name
-// expands to all of its surfaces. Unknown references are returned as errors
-// so the validator can report them by position.
+// Dependency returns a declared dependency by name, or nil.
+func (s *Spec) Dependency(name string) *Dependency {
+	for i := range s.System.Dependencies {
+		if s.System.Dependencies[i].Name == name {
+			return &s.System.Dependencies[i]
+		}
+	}
+	return nil
+}
+
+// ResolveSurfaces expands a module's Surfaces or Consumes list. A bare
+// interface name expands to all of its surfaces; "<system>/..." resolves in
+// a loaded dependency. Unknown references are returned as errors so the
+// validator can report them by position.
 func (s *Spec) ResolveSurfaces(refs []string) ([]SurfaceRef, []error) {
 	var out []SurfaceRef
 	var errs []error
 	for _, ref := range refs {
-		ifaceName, surfName, hasSurface := strings.Cut(ref, ".")
-		iface := s.Interface(ifaceName)
+		target, local := s, ref
+		system := ""
+		if sysName, rest, ok := strings.Cut(ref, "/"); ok {
+			if s.Dependency(sysName) == nil {
+				errs = append(errs, fmt.Errorf("unknown system %q in %q (declare it under system.dependencies)", sysName, ref))
+				continue
+			}
+			dep, loaded := s.Deps[sysName]
+			if !loaded {
+				errs = append(errs, fmt.Errorf("dependency %q is not loaded, cannot resolve %q", sysName, ref))
+				continue
+			}
+			target, local, system = dep, rest, sysName
+		}
+		ifaceName, surfName, hasSurface := strings.Cut(local, ".")
+		iface := target.Interface(ifaceName)
 		if iface == nil {
 			errs = append(errs, fmt.Errorf("unknown interface %q in %q", ifaceName, ref))
 			continue
 		}
 		if !hasSurface {
 			for i := range iface.Surfaces {
-				out = append(out, SurfaceRef{Interface: iface, Surface: &iface.Surfaces[i]})
+				out = append(out, SurfaceRef{System: system, Interface: iface, Surface: &iface.Surfaces[i]})
 			}
 			continue
 		}
 		found := false
 		for i := range iface.Surfaces {
 			if iface.Surfaces[i].Name == surfName {
-				out = append(out, SurfaceRef{Interface: iface, Surface: &iface.Surfaces[i]})
+				out = append(out, SurfaceRef{System: system, Interface: iface, Surface: &iface.Surfaces[i]})
 				found = true
 				break
 			}

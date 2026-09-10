@@ -1,0 +1,14 @@
+name: catalog
+intent: Own products and reservations and every write to them.
+brief: catalog.md
+goals: [G2]
+entities: [Product, Reservation]
+interface:
+  - name: Reserve
+    signature: "Reserve(sku: string, person: uuid, qty: int) -> (reservation: Reservation, available: int) | error"
+    pre: ["qty > 0"]
+invariants:
+  - Product.Available >= 0 for every product at all times.
+scenarios:
+  - {id: S1, given: product A with Available 5, when: "Reserve(A, p, 3)", then: Available(A) == 2, goals: [G2]}
+  - {id: S2, given: product A with Available 1, when: "20 concurrent Reserve(A, p, 1)", then: exactly one succeeds, goals: [G2]}

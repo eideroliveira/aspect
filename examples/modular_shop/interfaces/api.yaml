@@ -1,0 +1,12 @@
+name: api
+kind: http
+intent: What the storefront calls.
+auth: bearer token issued by identity
+surfaces:
+  - name: reserve
+    method: POST
+    route: /api/reservations
+    entity: Reservation
+    request: '{"sku": string, "qty": int}'
+    response: '{"id": int, "available": int}'
+    errors: ["401 when identity rejects the token", "404 unknown SKU", "409 insufficient stock"]

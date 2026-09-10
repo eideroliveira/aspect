@@ -121,6 +121,11 @@ func (v *SystemValidator) Judge(ctx context.Context, in SystemInput) (SystemVerd
 	if len(s.System.Interfaces) > 0 {
 		fmt.Fprintf(&b, "# Interfaces (full contracts)\n\n```yaml\n%s```\n\n", renderYAML(s.System.Interfaces))
 	}
+	for _, d := range s.System.Dependencies {
+		if dep, ok := s.Deps[d.Name]; ok && len(dep.System.Interfaces) > 0 {
+			fmt.Fprintf(&b, "# Interfaces of system dependency %s (consumed only)\n\n```yaml\n%s```\n\n", d.Name, renderYAML(dep.System.Interfaces))
+		}
+	}
 	for _, db := range s.Databases() {
 		fmt.Fprintf(&b, "# Database (%s)\n\n```yaml\n%s```\n\n", dbOwner(db), renderYAML(db))
 	}

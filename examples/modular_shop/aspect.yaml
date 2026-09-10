@@ -1,0 +1,30 @@
+# A spec split across files: interfaces and modules live in their own
+# directories and are pulled in with `file` and `dir` includes; the identity
+# service is another Aspect system this one depends on.
+aspect: 1
+
+system:
+  name: modular_shop
+  intent: >
+    Let people identity knows reserve products, so the shop never invents
+    its own accounts.
+  module_path: example.com/modular_shop
+  brief: briefs/system.md
+  dependencies:
+    - name: identity
+      spec: ../identity/aspect.yaml
+      intent: The shared login service; the shop trusts its tokens.
+  goals:
+    - id: G1
+      statement: Only a person identity recognises can reserve.
+      verify: test
+    - id: G2
+      statement: Stock never goes negative.
+      verify: invariant
+  database:
+    file: database.yaml
+  interfaces:
+    - file: interfaces/api.yaml
+
+modules:
+  - dir: modules

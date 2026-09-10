@@ -1,0 +1,16 @@
+aspect: 1
+system:
+  name: shop
+  intent: Sell things to people identity knows.
+  module_path: example.com/shop
+  brief: briefs/system.md
+  dependencies:
+    - name: identity
+      spec: ../identity/aspect.yaml
+      intent: The login service every product shares.
+  goals:
+    - {id: G1, statement: only logged-in people can reserve, verify: test}
+  interfaces:
+    - file: interfaces/api.yaml
+modules:
+  - dir: modules

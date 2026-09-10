@@ -877,6 +877,9 @@ func (a *assembler) tidy(s *spec.Spec) {
 				resolved, _ := s.ResolveSurfaces([]string{ref})
 				moved := false
 				for _, r := range resolved {
+					if r.System != "" {
+						continue
+					}
 					if p := providerSurfaces[r.ID()]; p != t.Name {
 						m.Consumes = append(m.Consumes, r.ID())
 						moved = true

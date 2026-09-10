@@ -1,0 +1,4 @@
+name: catalog
+intent: Know the products.
+brief: catalog.md
+scenarios: [{id: S1, when: list, then: products}]

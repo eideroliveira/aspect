@@ -6,7 +6,7 @@ whether the result achieves the spec's stated goals. Go module
 
 ## Layout
 
-- `internal/spec` — spec format (YAML), loader, semantic validator. Pure Go, no LLM. Single-tier specs are an implicit tier (`EffectiveTiers`); never branch on the spec's shape elsewhere.
+- `internal/spec` — spec format (YAML), loader (includes via `file`/`dir` on the node tree, briefs, dependencies), semantic validator. Pure Go, no LLM. Single-tier specs are an implicit tier (`EffectiveTiers`); never branch on the spec's shape elsewhere.
 - `internal/plan` — deterministic build order from the module dependency graph.
 - `internal/lang` — language profiles (go, swift): layout, manifest, toolchain steps, import guard, prompt rules. Agents and pipeline never branch on language.
 - `internal/llm` — the only package that calls the Anthropic API. Agents use the `llm.Client` interface.
@@ -16,7 +16,7 @@ whether the result achieves the spec's stated goals. Go module
 - `internal/drift` — re-validate existing code against a spec: presence, orphans, tests, verdicts vs baseline.
 - `internal/workspace` — writes proposed files (path-guarded) and runs the profile's toolchain steps.
 - `internal/pipeline` — orchestration and the report.
-- `cmd/aspect` — CLI: `validate`, `plan`, `run`, `drift`, `inventory`, `import`.
+- `cmd/aspect` — CLI: `validate`, `expand`, `plan`, `run`, `drift`, `inventory`, `import`.
 - `examples/` — reference specs; CI validates them.
 - `docs/` — architecture and spec format.
 

@@ -1,0 +1,47 @@
+# A small identity service other systems depend on. Built and run on its own;
+# examples/modular_shop consumes its API through `system.dependencies`.
+aspect: 1
+
+system:
+  name: identity
+  intent: Know who a person is across every product, with one login.
+  module_path: example.com/identity
+  goals:
+    - id: G1
+      statement: A person with valid credentials gets a token; anyone else gets nothing.
+      verify: test
+    - id: G2
+      statement: A token identifies exactly one person until it expires.
+      verify: invariant
+  interfaces:
+    - name: api
+      kind: http
+      intent: What every product calls to log people in and identify them.
+      surfaces:
+        - name: login
+          method: POST
+          route: /login
+          request: '{"email": string, "password": string}'
+          response: '{"token": string, "expires_at": time}'
+          errors: ["401 bad credentials", "429 too many attempts"]
+        - name: whoami
+          method: GET
+          route: /me
+          auth: bearer token
+          response: '{"id": uuid, "email": string}'
+          errors: ["401 missing or expired token"]
+
+modules:
+  - name: auth
+    intent: Check credentials, issue and verify tokens.
+    goals: [G1, G2]
+    surfaces: [api]
+    interface:
+      - {name: Login, signature: "Login(email: string, password: string) -> token: string | error"}
+      - {name: Verify, signature: "Verify(token: string) -> person_id: uuid | error"}
+    invariants:
+      - Verify(Login(e, p)) returns the person whose email is e, until the token expires.
+    scenarios:
+      - {id: S1, given: a person ana@example.com with password pw, when: "POST /login {ana@example.com, pw}", then: 200 with a token, goals: [G1]}
+      - {id: S2, given: the same person, when: "POST /login {ana@example.com, wrong}", then: 401, goals: [G1]}
+      - {id: S3, given: a token from S1, when: GET /me with it, then: "{id, email: ana@example.com}", goals: [G2]}
