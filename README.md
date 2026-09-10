@@ -99,6 +99,23 @@ Flags: `-model` (default `claude-opus-5`, or `$ASPECT_MODEL`), `-effort`
 N independent modules of a tier at once, `-fallbacks=false` to disable
 server-side refusal fallbacks.
 
+## Checking for drift
+
+Specs and code both change. `aspect drift` re-validates the code on disk
+against the spec without regenerating anything:
+
+```sh
+aspect drift shop.yaml -out ./out              # after editing the spec or the code
+aspect drift shop.yaml -out ./out -no-llm      # presence, orphans and tests only
+```
+
+It reports modules the spec names that have no code, code directories no
+module claims, modules whose tests fail, and, with a model, a fresh verdict
+per goal compared against the last `report.json` (or a `-baseline` you
+name): same, improved, regressed. It writes `DRIFT.md` and `drift.json`
+next to the code and exits non-zero when anything needs attention, so it
+can run in CI.
+
 ## Importing an existing system
 
 Aspect can recover a spec from an existing Go codebase, and re-express it
@@ -159,6 +176,8 @@ Early. What exists today:
   goals across modules and checks every provider/consumer contract.
 - Parallel generation of independent modules (`-parallel N`): model calls
   overlap, tool runs in a workspace stay serialised.
+- `aspect drift`: re-validate existing code against a changed spec, with
+  goal verdicts compared to a baseline.
 - Tiers and topologies: monolith, api_backend (backend + frontend in
   different languages, each in its own workspace), cloud_service.
 - `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
@@ -169,8 +188,6 @@ Early. What exists today:
 
 Planned next:
 
-- Spec-drift detection: re-run the Validator on an existing codebase against
-  an updated spec.
 - Importers for other source languages (the Describer and Synthesizer are
   language-agnostic; only the inventory is Go-specific).
 - A Swift import guard equivalent to the Go one.

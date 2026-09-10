@@ -159,6 +159,26 @@ implements, plus the guidance of the frameworks those surfaces use. Keeping
 detail with the owner keeps prompts small and makes drift visible: a module
 that touches an entity it does not own is contradicting what it was shown.
 
+## Drift
+
+`aspect drift` runs the judging half of the pipeline over code that already
+exists, generated or not. For every tier it opens the workspace, reads the
+tree, and for every planned module finds its implementation and tests by
+the profile's layout, runs the real toolchain, and asks the Validator for a
+verdict with the same prompt the build used. The System Validator then
+judges the whole. Three things fall out that a build cannot tell you:
+
+- **missing** modules: named in the spec, no code on disk (their goals
+  become `not_achieved`);
+- **orphans**: source directories no module claims, the usual sign that
+  the spec fell behind the code;
+- **regressions**: goal statuses compared with a baseline `report.json` or
+  `drift.json`, so a change to either side shows up as same, improved or
+  regressed.
+
+`-no-llm` keeps the deterministic part only, which is enough for a CI gate
+on presence and tests.
+
 ## Importing an existing system
 
 ```

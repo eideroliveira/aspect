@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/eideroliveira/aspect/internal/analyze"
+	"github.com/eideroliveira/aspect/internal/drift"
 	"github.com/eideroliveira/aspect/internal/importer"
 	"github.com/eideroliveira/aspect/internal/llm"
 	"github.com/eideroliveira/aspect/internal/pipeline"
@@ -27,6 +28,7 @@ Usage:
   aspect validate <spec.yaml>          check the spec and report every issue
   aspect plan     <spec.yaml>          show the module build order and what each step needs
   aspect run      <spec.yaml> [flags]  generate code and tests, run them, validate goals
+  aspect drift    <spec.yaml> [flags]  re-validate existing code against the spec without regenerating
   aspect inventory <dir> [flags]       deterministic inventory of an existing Go codebase (no model calls)
   aspect import   <dir> [flags]        recover a spec from an existing Go codebase
 
@@ -38,6 +40,14 @@ Run flags:
   -max-repairs N    coder repair rounds per module (default 3)
   -parallel N       independent modules generated at once (default 1)
   -fallbacks=false  disable server-side refusal fallbacks
+
+Drift flags:
+  -out DIR          where the code lives, as given to run -out (default ./out)
+  -baseline FILE    a previous report.json or drift.json to compare goal verdicts against
+                    (default out/<system>/report.json when it exists)
+  -no-llm           presence, orphans and tests only; no verdicts
+  -no-fail          exit 0 even when drift is found
+  -model, -effort, -fallbacks as for run
 
 Inventory and import flags:
   -include a,b      only these package directories (prefix match)
@@ -79,6 +89,8 @@ func main() {
 		err = runPlan(path)
 	case "run":
 		err = runRun(path, os.Args[3:])
+	case "drift":
+		err = runDrift(path, os.Args[3:])
 	case "inventory":
 		err = runInventory(path, os.Args[3:])
 	case "import":
@@ -199,6 +211,70 @@ func runRun(path string, args []string) error {
 		}
 	}
 	return runErr
+}
+
+func runDrift(path string, args []string) error {
+	fs := flag.NewFlagSet("drift", flag.ContinueOnError)
+	out := fs.String("out", "out", "directory holding the generated code")
+	baseline := fs.String("baseline", "", "previous report.json or drift.json")
+	noLLM := fs.Bool("no-llm", false, "skip verdicts")
+	noFail := fs.Bool("no-fail", false, "exit 0 even when drift is found")
+	model := fs.String("model", envOr("ASPECT_MODEL", llm.DefaultModel), "model id")
+	effort := fs.String("effort", "high", "effort level")
+	fallbacks := fs.Bool("fallbacks", true, "server-side refusal fallbacks")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	s, _, err := loadValidated(path)
+	if err != nil {
+		return err
+	}
+	p, err := plan.Build(s)
+	if err != nil {
+		return err
+	}
+	if *baseline == "" {
+		if candidate := filepath.Join(*out, s.System.Name, "report.json"); fileExists(candidate) {
+			*baseline = candidate
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	var client llm.Client
+	if !*noLLM {
+		client = llm.NewAnthropic(llm.WithModel(*model), llm.WithEffort(*effort), llm.WithFallbacks(*fallbacks))
+	}
+	rep, err := drift.Run(ctx, client, s, p, drift.Options{OutDir: *out, Baseline: *baseline, NoLLM: *noLLM, Log: os.Stderr, Model: *model})
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(*out, s.System.Name)
+	if err := rep.Write(dir); err != nil {
+		return err
+	}
+	fmt.Printf("drift report: %s\n", filepath.Join(dir, "DRIFT.md"))
+	for _, g := range rep.Goals {
+		fmt.Printf("  %-4s %-13s %-9s %s\n", g.ID, g.Status, g.Change, g.Statement)
+	}
+	if m := rep.Missing(); len(m) > 0 {
+		fmt.Printf("  missing modules: %s\n", strings.Join(m, ", "))
+	}
+	if len(rep.Orphans) > 0 {
+		fmt.Printf("  unclaimed code: %s\n", strings.Join(rep.Orphans, ", "))
+	}
+	if f := rep.Failing(); len(f) > 0 {
+		fmt.Printf("  failing tests: %s\n", strings.Join(f, ", "))
+	}
+	if rep.Drifted() && !*noFail {
+		return fmt.Errorf("drift detected")
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func splitList(s string) []string {
