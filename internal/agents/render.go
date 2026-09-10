@@ -240,8 +240,17 @@ func renderModule(t Task, heading string) string {
 }
 
 // complete requests a JSON answer matching schema and decodes it into out.
+//
+// Structured outputs compile the schema into a grammar on the server, and
+// large schemas (a spec fragment with nested entities, surfaces and
+// scenarios) can exceed its size limit. When the API says so, the request
+// is retried without the grammar: the schema goes into the prompt as text
+// and the answer is parsed leniently instead of being guaranteed.
 func complete(ctx context.Context, c llm.Client, system, prompt string, schema map[string]any, out any) (llm.Response, error) {
 	resp, err := c.Complete(ctx, llm.Request{System: system, Prompt: prompt, Schema: schema})
+	if err != nil && schema != nil && IsGrammarTooLarge(err) {
+		resp, err = c.Complete(ctx, llm.Request{System: system, Prompt: prompt + schemaHint(schema)})
+	}
 	if err != nil {
 		return resp, err
 	}
@@ -250,6 +259,22 @@ func complete(ctx context.Context, c llm.Client, system, prompt string, schema m
 		return resp, fmt.Errorf("agent returned invalid JSON: %w\n--- response ---\n%s", err, truncate(text, 2000))
 	}
 	return resp, nil
+}
+
+// IsGrammarTooLarge reports the API refusal of a structured-output schema
+// whose compiled grammar exceeds the server's limit.
+func IsGrammarTooLarge(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "compiled grammar is too large")
+}
+
+// schemaHint renders the schema as an instruction the model can follow
+// without server-side enforcement.
+func schemaHint(schema map[string]any) string {
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return ""
+	}
+	return "\n\nAnswer with a single JSON document and nothing else: no prose, no code fence. It must conform to this JSON schema exactly (every listed property present, no others):\n\n" + string(b) + "\n"
 }
 
 // stripFence tolerates a model that wraps JSON in a markdown code fence even

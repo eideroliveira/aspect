@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -188,5 +189,38 @@ func TestRenderShowsSystemDependencies(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
+	}
+}
+
+// grammarLLM refuses schema-bearing requests the way the API does for a
+// grammar that is too large, and answers schema-less ones.
+type grammarLLM struct {
+	calls   int
+	prompts []string
+}
+
+func (g *grammarLLM) Complete(_ context.Context, req llm.Request) (llm.Response, error) {
+	g.calls++
+	g.prompts = append(g.prompts, req.Prompt)
+	if req.Schema != nil {
+		return llm.Response{}, errors.New(`llm: API error 400: {"type":"error","error":{"type":"invalid_request_error","message":"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."}}`)
+	}
+	return llm.Response{Text: "```json\n{\"files\":[{\"path\":\"stock/stock.go\",\"content\":\"package stock\"}],\"notes\":\"n\",\"concerns\":[]}\n```"}, nil
+}
+
+func TestCompleteFallsBackWhenGrammarIsTooLarge(t *testing.T) {
+	g := &grammarLLM{}
+	got, _, err := (&Coder{LLM: g}).Generate(context.Background(), CodeInput{Task: task(t, "go")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.calls != 2 || len(got.Files) != 1 {
+		t.Fatalf("calls=%d files=%d", g.calls, len(got.Files))
+	}
+	if !strings.Contains(g.prompts[1], "conform to this JSON schema") || !strings.Contains(g.prompts[1], `"additionalProperties":false`) {
+		t.Fatal("the retry must carry the schema in the prompt")
+	}
+	if !IsGrammarTooLarge(errors.New("x: The compiled grammar is too large, y")) || IsGrammarTooLarge(errors.New("rate limited")) {
+		t.Fatal("IsGrammarTooLarge misclassifies")
 	}
 }
