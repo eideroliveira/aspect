@@ -382,8 +382,8 @@ an external provider or database means `cloud_service`, otherwise
 `stack` and `modules` sit at the top. A `cloud_service` spec differs only in
 that its server-side interfaces and its database carry `provider: external`
 and `tier: external`. See
-[examples/monolith_minimal](../examples/monolith_minimal/aspect.yaml) and
-[examples/cloud_service_minimal](../examples/cloud_service_minimal/aspect.yaml).
+[examples/monolith_minimal](https://github.com/eideroliveira/aspect/blob/main/examples/monolith_minimal/aspect.yaml) and
+[examples/cloud_service_minimal](https://github.com/eideroliveira/aspect/blob/main/examples/cloud_service_minimal/aspect.yaml).
 
 ### Multi-tier specs
 
@@ -432,7 +432,7 @@ through `consumes`); tier dependencies are acyclic. Each tier is generated
 into its own workspace, `out/<system>/<tier>/`, in dependency order. A
 single-tier spec keeps `out/<system>/`.
 
-Full example: [examples/shop_two_tier](../examples/shop_two_tier/aspect.yaml).
+Full example: [examples/shop_two_tier](https://github.com/eideroliveira/aspect/blob/main/examples/shop_two_tier/aspect.yaml).
 
 ---
 
