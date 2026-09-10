@@ -46,6 +46,8 @@ type ModuleReport struct {
 	Usage      llm.Usage      `json:"usage"`
 	Duration   time.Duration  `json:"duration"`
 	Error      string         `json:"error,omitempty"`
+
+	code []workspace.File
 }
 
 // Report is the outcome of a whole run.
@@ -59,8 +61,12 @@ type Report struct {
 	Started  time.Time      `json:"started"`
 	Finished time.Time      `json:"finished"`
 	Modules  []ModuleReport `json:"modules"`
-	Usage    llm.Usage      `json:"usage"`
-	// Goals summarises every system goal across modules.
+	// SystemVerdict is the cross-module verdict, produced once every tier
+	// is built.
+	SystemVerdict      agents.SystemVerdict `json:"system_verdict"`
+	SystemVerdictError string               `json:"system_verdict_error,omitempty"`
+	Usage              llm.Usage            `json:"usage"`
+	// Goals summarises every system goal across modules and the system pass.
 	Goals []GoalSummary `json:"goals"`
 }
 
@@ -73,11 +79,15 @@ type TierOutput struct {
 
 // GoalSummary rolls a goal's verdicts up across the modules that own it.
 type GoalSummary struct {
-	ID        string                       `json:"id"`
-	Statement string                       `json:"statement"`
-	Verify    spec.VerifyMethod            `json:"verify"`
-	Status    agents.GoalStatus            `json:"status"`
-	ByModule  map[string]agents.GoalStatus `json:"by_module"`
+	ID        string            `json:"id"`
+	Statement string            `json:"statement"`
+	Verify    spec.VerifyMethod `json:"verify"`
+	// Status is the weakest of the module roll-up and the system verdict.
+	Status   agents.GoalStatus            `json:"status"`
+	ByModule map[string]agents.GoalStatus `json:"by_module"`
+	// System is the System Validator's verdict on the goal.
+	System   agents.GoalStatus `json:"system"`
+	Evidence string            `json:"evidence,omitempty"`
 }
 
 // Runner wires agents to a workspace.
@@ -85,6 +95,7 @@ type Runner struct {
 	Coder     *agents.Coder
 	Tester    *agents.Tester
 	Validator *agents.Validator
+	System    *agents.SystemValidator
 	Opts      Options
 }
 
@@ -100,6 +111,7 @@ func New(c llm.Client, opts Options) *Runner {
 		Coder:     &agents.Coder{LLM: c},
 		Tester:    &agents.Tester{LLM: c},
 		Validator: &agents.Validator{LLM: c},
+		System:    &agents.SystemValidator{LLM: c},
 		Opts:      opts,
 	}
 }
@@ -172,8 +184,26 @@ func (r *Runner) Run(ctx context.Context, s *spec.Spec, p *plan.Plan) (*Report, 
 			}
 		}
 	}
+	// Cross-module pass: the parts have been judged; now the whole.
+	r.logf("#### system validator: judging goals across modules")
+	var evidence []agents.ModuleEvidence
+	for _, m := range rep.Modules {
+		evidence = append(evidence, agents.ModuleEvidence{Tier: m.Tier, Module: m.Module, TestsOK: m.TestsOK, Verdict: m.Verdict, Code: m.code, Error: m.Error})
+	}
+	sysVerdict, resp, err := r.System.Judge(ctx, agents.SystemInput{Spec: s, Modules: evidence})
+	rep.Usage.Add(resp)
+	if err != nil {
+		rep.SystemVerdictError = err.Error()
+		r.logf("   error: %s", err)
+	} else {
+		rep.SystemVerdict = sysVerdict
+	}
+
 	rep.Finished = time.Now()
-	rep.Goals = summarise(s, rep.Modules)
+	rep.Goals = summarise(s, rep.Modules, rep.SystemVerdict, rep.SystemVerdictError != "")
+	if rep.SystemVerdictError != "" {
+		failed = append(failed, "system")
+	}
 	if len(failed) > 0 {
 		return rep, fmt.Errorf("pipeline: %d module(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
@@ -274,6 +304,7 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 	}
 	mr.TestsOK = result.OK
 	mr.TestOutput = tail(result.Output, 8000)
+	mr.code = code.Files
 	for _, f := range append(append([]workspace.File{}, code.Files...), tests.Files...) {
 		mr.Files = append(mr.Files, f.Path)
 	}
@@ -346,10 +377,16 @@ func tail(s string, n int) string {
 	return "…\n" + s[len(s)-n:]
 }
 
+var statusRank = map[agents.GoalStatus]int{agents.Achieved: 0, agents.Partial: 1, agents.Unverifiable: 2, agents.NotAchieved: 3}
+
 // summarise rolls goal verdicts up: a goal is only as achieved as its weakest
-// owning module.
-func summarise(s *spec.Spec, mods []ModuleReport) []GoalSummary {
-	rank := map[agents.GoalStatus]int{agents.Achieved: 0, agents.Partial: 1, agents.Unverifiable: 2, agents.NotAchieved: 3}
+// owning module, and never better than the system pass judged it.
+func summarise(s *spec.Spec, mods []ModuleReport, system agents.SystemVerdict, systemFailed bool) []GoalSummary {
+	rank := statusRank
+	bySystem := map[string]agents.GoalVerdict{}
+	for _, g := range system.Goals {
+		bySystem[g.ID] = g
+	}
 	var out []GoalSummary
 	for _, g := range s.System.Goals {
 		gs := GoalSummary{ID: g.ID, Statement: g.Statement, Verify: g.Verify, ByModule: map[string]agents.GoalStatus{}}
@@ -373,6 +410,15 @@ func summarise(s *spec.Spec, mods []ModuleReport) []GoalSummary {
 		}
 		if worst == "" {
 			worst = agents.Unverifiable
+		}
+		if sv, ok := bySystem[g.ID]; ok && !systemFailed {
+			gs.System = sv.Status
+			gs.Evidence = sv.Evidence
+		} else {
+			gs.System = agents.Unverifiable
+		}
+		if rank[gs.System] > rank[worst] {
+			worst = gs.System
 		}
 		gs.Status = worst
 		out = append(out, gs)

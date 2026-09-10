@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -32,13 +33,43 @@ func (rep *Report) Markdown() string {
 		rep.Topology, rep.Language, rep.Model, rep.Started.Format("2006-01-02 15:04:05"), rep.Finished.Sub(rep.Started).Round(1e9),
 		rep.Usage.Calls, rep.Usage.InputTokens, rep.Usage.OutputTokens, rep.Usage.CacheReadTokens)
 
-	b.WriteString("## Goals\n\n| Goal | Verify | Status | By module |\n|---|---|---|---|\n")
+	b.WriteString("## Goals\n\n| Goal | Verify | Status | System pass | By module |\n|---|---|---|---|---|\n")
 	for _, g := range rep.Goals {
 		var parts []string
 		for m, st := range g.ByModule {
 			parts = append(parts, fmt.Sprintf("%s: %s", m, st))
 		}
-		fmt.Fprintf(&b, "| **%s** %s | %s | %s | %s |\n", g.ID, g.Statement, g.Verify, badge(string(g.Status)), strings.Join(parts, "<br>"))
+		sort.Strings(parts)
+		fmt.Fprintf(&b, "| **%s** %s | %s | %s | %s | %s |\n", g.ID, g.Statement, g.Verify, badge(string(g.Status)), badge(string(g.System)), strings.Join(parts, "<br>"))
+	}
+
+	b.WriteString("\n## System\n\n")
+	if rep.SystemVerdictError != "" {
+		fmt.Fprintf(&b, "**The system pass failed:** %s\n", rep.SystemVerdictError)
+	} else {
+		fmt.Fprintf(&b, "Intent: **%s** — %s\n", rep.SystemVerdict.IntentStatus, oneLine(rep.SystemVerdict.IntentRationale))
+		if len(rep.SystemVerdict.Goals) > 0 {
+			b.WriteString("\n| Goal | System verdict | Confidence | Evidence |\n|---|---|---|---|\n")
+			for _, g := range rep.SystemVerdict.Goals {
+				ev := g.Evidence
+				if len(g.Gaps) > 0 {
+					ev += " Gaps: " + strings.Join(g.Gaps, "; ")
+				}
+				fmt.Fprintf(&b, "| %s | %s | %.0f%% | %s |\n", g.ID, badge(string(g.Status)), g.Confidence*100, oneLine(ev))
+			}
+		}
+		if len(rep.SystemVerdict.Integration) > 0 {
+			b.WriteString("\n| Surface | Provider | Consumer | Status | Note |\n|---|---|---|---|---|\n")
+			for _, f := range rep.SystemVerdict.Integration {
+				fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", f.Surface, f.Provider, f.Consumer, badge(string(f.Status)), oneLine(f.Note))
+			}
+		}
+		if len(rep.SystemVerdict.Recommendations) > 0 {
+			b.WriteString("\nRecommendations:\n\n")
+			for _, c := range rep.SystemVerdict.Recommendations {
+				fmt.Fprintf(&b, "- %s\n", oneLine(c))
+			}
+		}
 	}
 
 	if len(rep.Tiers) > 1 {

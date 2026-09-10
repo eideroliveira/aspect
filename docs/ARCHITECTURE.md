@@ -66,6 +66,22 @@ A failed test run caps every `test` and `invariant` goal below `achieved`,
 whatever the model would otherwise say; the pipeline states the real outcome
 in the Validator's prompt and the report shows the last run.
 
+## The system pass
+
+Module verdicts answer "does this module do its part?". Once every tier is
+built, a separate System Validator answers "do the parts add up?". It sees
+the whole spec, every module's test outcome and verdict, and the
+implementation of every module that provides or consumes a surface (other
+modules are included while a size budget allows). It returns one verdict
+per system goal considering all accountable modules together, an intent
+judgement for the system as a whole, and an integration finding per
+provider/consumer pairing: routes, methods, shapes, errors and auth
+compared on both sides, across tiers and languages.
+
+A goal's final status is the weakest of the module roll-up and the system
+verdict, so a system that composes badly cannot hide behind modules that
+each pass.
+
 ## Silence never means success
 
 Two rules make the report conservative:

@@ -33,6 +33,16 @@ func (s *scriptedLLM) Complete(_ context.Context, req llm.Request) (llm.Response
 	return llm.Response{Text: a, InputTokens: 100, OutputTokens: 50}, nil
 }
 
+func systemVerdict(goal string, status agents.GoalStatus) agents.SystemVerdict {
+	return agents.SystemVerdict{
+		Goals:           []agents.GoalVerdict{{ID: goal, Status: status, Evidence: "system pass", Gaps: []string{}, Confidence: 0.8}},
+		IntentStatus:    agents.Aligned,
+		IntentRationale: "the parts add up",
+		Integration:     []agents.IntegrationFinding{},
+		Recommendations: []string{},
+	}
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -86,7 +96,7 @@ func TestRunRepairsUntilTestsPassThenValidates(t *testing.T) {
 	verdict := agents.Verdict{Module: "counter", Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "TestInc_S1", Gaps: []string{}, Confidence: 0.9}},
 		IntentStatus: agents.Aligned, IntentRationale: "does what it says", Scenarios: []agents.ScenarioVerdict{{Scenario: "S1", Covered: true, Test: "TestInc_S1"}}, Recommendations: []string{}}
 
-	fake := &scriptedLLM{answers: []string{mustJSON(t, buggy), mustJSON(t, tests), mustJSON(t, fixed), mustJSON(t, verdict)}}
+	fake := &scriptedLLM{answers: []string{mustJSON(t, buggy), mustJSON(t, tests), mustJSON(t, fixed), mustJSON(t, verdict), mustJSON(t, systemVerdict("G1", agents.Partial))}}
 	out := t.TempDir()
 	r := New(fake, Options{OutDir: out, MaxRepairs: 2, Model: "fake"})
 	rep, err := r.Run(context.Background(), s, p)
@@ -100,7 +110,7 @@ func TestRunRepairsUntilTestsPassThenValidates(t *testing.T) {
 	if !m.TestsOK || m.Iterations != 2 {
 		t.Fatalf("tests_ok=%v iterations=%d output:\n%s", m.TestsOK, m.Iterations, m.TestOutput)
 	}
-	if m.Usage.Calls != 4 || rep.Usage.InputTokens != 400 {
+	if m.Usage.Calls != 4 || rep.Usage.Calls != 5 || rep.Usage.InputTokens != 500 {
 		t.Fatalf("usage = %+v / %+v", m.Usage, rep.Usage)
 	}
 	if !strings.Contains(fake.prompts[2], "Failing output") || !strings.Contains(fake.prompts[2], "got 0") {
@@ -109,8 +119,14 @@ func TestRunRepairsUntilTestsPassThenValidates(t *testing.T) {
 	if !strings.Contains(fake.prompts[3], "Test run: PASSED") {
 		t.Fatal("validator must see the final, passing test run")
 	}
-	if rep.Goals[0].Status != agents.Achieved || rep.Goals[0].ByModule["counter"] != agents.Achieved {
-		t.Fatalf("goal summary = %+v", rep.Goals[0])
+	if g := rep.Goals[0]; g.ByModule["counter"] != agents.Achieved || g.System != agents.Partial || g.Status != agents.Partial {
+		t.Fatalf("goal summary must take the weakest of module roll-up and system pass: %+v", g)
+	}
+	sysPrompt := fake.prompts[4]
+	for _, want := range []string{"Module verdict:", "tests_ok: true", "## Module counter", "func (c *Counter) Inc()"} {
+		if !strings.Contains(sysPrompt, want) {
+			t.Errorf("system validator prompt lacks %q", want)
+		}
 	}
 
 	if err := rep.Write(out); err != nil {
@@ -120,7 +136,7 @@ func TestRunRepairsUntilTestsPassThenValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"✅ achieved", "Tests passed after 2 run(s)", "TestInc_S1"} {
+	for _, want := range []string{"🟡 partial", "Tests passed after 2 run(s)", "TestInc_S1", "## System", "the parts add up"} {
 		if !strings.Contains(string(md), want) {
 			t.Errorf("REPORT.md lacks %q", want)
 		}
@@ -185,7 +201,7 @@ func TestRunSwiftModuleThroughRealToolchain(t *testing.T) {
 	verdict := agents.Verdict{Module: "counter", Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "testIncrement_S1", Gaps: []string{}, Confidence: 0.9}},
 		IntentStatus: agents.Aligned, IntentRationale: "ok", Scenarios: []agents.ScenarioVerdict{}, Recommendations: []string{}}
 
-	fake := &scriptedLLM{answers: []string{mustJSON(t, code), mustJSON(t, tests), mustJSON(t, verdict)}}
+	fake := &scriptedLLM{answers: []string{mustJSON(t, code), mustJSON(t, tests), mustJSON(t, verdict), mustJSON(t, systemVerdict("G1", agents.Achieved))}}
 	out := t.TempDir()
 	rep, err := New(fake, Options{OutDir: out, MaxRepairs: 1, Model: "fake"}).Run(context.Background(), s, p)
 	if err != nil {
@@ -290,6 +306,8 @@ func TestRunTwoTiersEachInItsOwnWorkspace(t *testing.T) {
 	fake := &scriptedLLM{answers: []string{
 		mustJSON(t, goCode), mustJSON(t, goTests), mustJSON(t, verdict("counter")),
 		mustJSON(t, swiftCode), mustJSON(t, swiftTests), mustJSON(t, verdict("client")),
+		mustJSON(t, agents.SystemVerdict{Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "both sides agree", Gaps: []string{}, Confidence: 0.9}},
+			IntentStatus: agents.Aligned, Integration: []agents.IntegrationFinding{{Surface: "api.count", Provider: "counter", Consumer: "client", Status: agents.Achieved, Note: "GET /count on both sides"}}, Recommendations: []string{}}),
 	}}
 	out := t.TempDir()
 	rep, err := New(fake, Options{OutDir: out, MaxRepairs: 1, Model: "fake"}).Run(context.Background(), s, p)
@@ -320,8 +338,12 @@ func TestRunTwoTiersEachInItsOwnWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	md, _ := os.ReadFile(filepath.Join(out, "shop", "REPORT.md"))
-	if !strings.Contains(string(md), "## Tiers") || !strings.Contains(string(md), "(tier mobile)") {
-		t.Fatalf("report must show tiers:\n%s", md)
+	if !strings.Contains(string(md), "## Tiers") || !strings.Contains(string(md), "(tier mobile)") || !strings.Contains(string(md), "GET /count on both sides") {
+		t.Fatalf("report must show tiers and integration findings:\n%s", md)
+	}
+	sysPrompt := fake.prompts[6]
+	if !strings.Contains(sysPrompt, "Interfaces (full contracts)") || !strings.Contains(sysPrompt, "Module client") || !strings.Contains(sysPrompt, "Module counter") {
+		t.Fatal("system validator must see the contracts and both sides' code")
 	}
 }
 

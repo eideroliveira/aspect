@@ -147,7 +147,8 @@ Early. What exists today:
 - Coder, Tester and Validator agents on the Anthropic API with structured
   JSON outputs, prompt caching, streaming, and refusal fallbacks.
 - Workspace runner per language with a timeout.
-- Repair loop and per-module, per-goal report.
+- Repair loop and per-module, per-goal report, plus a system pass that judges
+  goals across modules and checks every provider/consumer contract.
 - Tiers and topologies: monolith, api_backend (backend + frontend in
   different languages, each in its own workspace), cloud_service.
 - `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
@@ -158,7 +159,6 @@ Early. What exists today:
 
 Planned next:
 
-- Cross-module validation pass once all modules exist (system-level goals).
 - Spec-drift detection: re-run the Validator on an existing codebase against
   an updated spec.
 - Importers for other source languages (the Describer and Synthesizer are
@@ -186,5 +186,7 @@ MIT. See [LICENSE](LICENSE).
 
 This system was generated from this prompt:
 ```
-I want to create a new project, preserved in github. This project is about aspect agents. I want to build a system of agents, which based on a formal specification of a system, will generate the code, tests and validate if the system and modules intents are achieving the stated goals
+I want to create a new project, preserved in github. This project is about aspect agents. I want to build a system of agents, 
+which based on a formal specification of a system, will generate the code, tests and validate if the system and modules 
+intents are achieving the stated goals.
 ```
