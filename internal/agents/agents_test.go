@@ -70,6 +70,7 @@ func task(t *testing.T, language string) Task {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.Module("stock").Brief = spec.Brief{Path: "briefs/stock.md", Text: "Stock is counted in whole units; never fractional."}
 	return Task{Spec: s, Module: s.Module("stock"), Lang: p}
 }
 
@@ -106,6 +107,8 @@ func TestCoderKeepsOnlyModuleSourceFiles(t *testing.T) {
 		"route: /admin/items",
 		"How to use qor5 here",
 		"presets.New()",
+		"## Module brief (briefs/stock.md)",
+		"never fractional",
 	} {
 		if !strings.Contains(f.prompt, want) {
 			t.Errorf("prompt lacks %q", want)

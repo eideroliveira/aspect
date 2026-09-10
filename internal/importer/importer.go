@@ -65,6 +65,9 @@ type Result struct {
 	Issues    spec.Issues
 	Warnings  []string
 	Usage     llm.Usage
+	// Briefs are sidecar documents to write next to the spec, keyed by the
+	// relative path the spec references.
+	Briefs map[string]string
 }
 
 // Run performs a full import.
@@ -101,6 +104,7 @@ func Run(ctx context.Context, c llm.Client, opts Options) (*Result, error) {
 	res.Synthesis = synth
 
 	res.Spec, res.Warnings = Assemble(inv, frags, synth, opts)
+	res.Briefs = briefs(inv, res.Spec)
 	res.Issues = spec.Validate(res.Spec)
 	return res, nil
 }
@@ -335,6 +339,35 @@ func Assemble(inv *analyze.Inventory, frags []agents.Fragment, synth agents.Synt
 	a.goals(s, synth)
 	a.tidy(s)
 	return s, a.warnings
+}
+
+// briefs turns the documents found in mirrored packages into sidecar files
+// (briefs/<module>.md) and points the module's brief at them. The text is
+// also placed on the module so the in-memory spec validates and agents see
+// it without a reload.
+func briefs(inv *analyze.Inventory, s *spec.Spec) map[string]string {
+	out := map[string]string{}
+	for _, p := range inv.Packages {
+		if len(p.Docs) == 0 {
+			continue
+		}
+		m := s.Module(ModuleName(p.Dir))
+		if m == nil {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "<!-- Recovered by aspect import from %s. Edit freely; this is the module's brief. -->\n\n", p.ImportPath)
+		for i, d := range p.Docs {
+			if i > 0 {
+				b.WriteString("\n\n---\n\n")
+			}
+			fmt.Fprintf(&b, "<!-- %s -->\n\n%s", d.Name, strings.TrimSpace(d.Content))
+		}
+		rel := filepath.ToSlash(filepath.Join("briefs", m.Name+".md"))
+		out[rel] = b.String()
+		m.Brief = spec.Brief{Path: rel, Text: b.String()}
+	}
+	return out
 }
 
 func firstNonEmpty(vals ...string) string {

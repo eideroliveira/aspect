@@ -120,7 +120,7 @@ func TestRunMirrorsPackages(t *testing.T) {
 
 	// The YAML round-trips through the loader.
 	path := filepath.Join(t.TempDir(), "aspect.yaml")
-	if err := Write(path, s, res.Warnings); err != nil {
+	if err := Write(path, s, res.Warnings, res.Briefs); err != nil {
 		t.Fatal(err)
 	}
 	back, err := spec.Load(path)
@@ -129,6 +129,12 @@ func TestRunMirrorsPackages(t *testing.T) {
 	}
 	if issues := spec.Validate(back); issues.HasErrors() {
 		t.Fatalf("round-tripped spec invalid:\n%v", issues)
+	}
+	if got := back.Module("store").Brief; got.Path != "briefs/store.md" || !strings.Contains(got.Text, "SKU is immutable") {
+		t.Fatalf("the store package's CLAUDE.md must become the module brief: %+v", got)
+	}
+	if back.Module("web").Brief.Path != "" {
+		t.Fatal("a package without documents gets no brief")
 	}
 	b, _ := os.ReadFile(path)
 	if !strings.Contains(string(b), "# Assembly warnings:") || strings.Contains(string(b), "key: \"\"") {
@@ -254,7 +260,7 @@ func TestRunSplitsIntoApiBackendTiers(t *testing.T) {
 		t.Fatalf("api_backend spec must validate; issues:\n%v", res.Issues)
 	}
 	path := filepath.Join(t.TempDir(), "two.yaml")
-	if err := Write(path, s, res.Warnings); err != nil {
+	if err := Write(path, s, res.Warnings, res.Briefs); err != nil {
 		t.Fatal(err)
 	}
 	back, err := spec.Load(path)

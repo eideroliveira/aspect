@@ -80,6 +80,9 @@ func renderContext(t Task) string {
 		Constraints []string      `yaml:"constraints,omitempty"`
 	}{s.Name, s.Intent, t.Spec.EffectiveTopology(), s.Goals, s.Constraints}
 	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderYAML(view))
+	if text := strings.TrimSpace(s.Brief.Text); text != "" {
+		fmt.Fprintf(&b, "## System brief (%s)\n\n%s\n\n", s.Brief.Path, text)
+	}
 
 	if len(t.Spec.Tiers) > 0 {
 		type tierView struct {
@@ -100,6 +103,9 @@ func renderContext(t Task) string {
 		fmt.Fprintf(&b, "# Tiers (this module is in tier %q)\n\nTiers are separate deployables in their own languages; they talk only through interfaces.\n\n```yaml\n%s```\n\n", tier.Name, renderYAML(views))
 	}
 	fmt.Fprintf(&b, "# This tier\n\nLanguage: %s\nModule path: %s\n\n", t.Lang.DisplayName, tier.ModulePath)
+	if text := strings.TrimSpace(tier.Brief.Text); text != "" {
+		fmt.Fprintf(&b, "## Tier brief (%s)\n\n%s\n\n", tier.Brief.Path, text)
+	}
 	if ls := tier.LanguageStack(); ls != nil {
 		fmt.Fprintf(&b, "# Stack (%s)\n\n```yaml\n%s```\n\n", t.Lang.DisplayName, renderYAML(ls))
 	}
@@ -162,6 +168,9 @@ func renderModule(t Task, heading string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\nModule: %s\nImport path: %s/%s\nCode directory: %s\nTest directory: %s\n\n```yaml\n%s```\n\n",
 		heading, m.Name, t.modulePath(), m.Name, t.Lang.CodeDir(m.Name), t.Lang.TestDir(m.Name), renderYAML(m))
+	if text := strings.TrimSpace(m.Brief.Text); text != "" {
+		fmt.Fprintf(&b, "## Module brief (%s)\n\nThe owner's own description of this module. It elaborates the spec above and is binding where it is more specific; where the two conflict, say so in concerns rather than choosing silently.\n\n%s\n\n", m.Brief.Path, text)
+	}
 
 	if len(m.Entities) > 0 {
 		var ents []spec.Entity

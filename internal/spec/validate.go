@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -118,7 +119,23 @@ func Validate(s *Spec) Issues {
 	validateInterfaces(c, x)
 	validateModules(c, x)
 	validateTopology(c, x)
+	validateBriefs(c, s)
 	return c.issues
+}
+
+func validateBriefs(c *collector, s *Spec) {
+	for owner, b := range s.Briefs() {
+		if b.Path == "" {
+			continue
+		}
+		if filepath.IsAbs(b.Path) || strings.HasPrefix(filepath.Clean(b.Path), "..") {
+			c.add(Error, owner+".brief", "%q must be a relative path inside the spec's directory", b.Path)
+			continue
+		}
+		if strings.TrimSpace(b.Text) == "" {
+			c.add(Warning, owner+".brief", "%q was not loaded (parsed from memory, or the file is empty); agents will not see it", b.Path)
+		}
+	}
 }
 
 func validateSystem(c *collector, x *ctx) map[string]bool {

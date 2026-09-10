@@ -112,6 +112,9 @@ func (v *SystemValidator) Judge(ctx context.Context, in SystemInput) (SystemVerd
 		Constraints []string      `yaml:"constraints,omitempty"`
 	}{s.System.Name, s.System.Intent, s.EffectiveTopology(), s.System.Goals, s.System.Constraints}
 	fmt.Fprintf(&b, "# System\n\n```yaml\n%s```\n\n", renderYAML(view))
+	if text := strings.TrimSpace(s.System.Brief.Text); text != "" {
+		fmt.Fprintf(&b, "## System brief (%s)\n\n%s\n\n", s.System.Brief.Path, text)
+	}
 	if len(s.Tiers) > 0 {
 		fmt.Fprintf(&b, "# Tiers\n\n```yaml\n%s```\n\n", renderYAML(tierOutline(s)))
 	}

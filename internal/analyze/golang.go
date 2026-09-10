@@ -51,7 +51,19 @@ type Package struct {
 	Funcs      []FuncDecl `json:"funcs"`
 	Routes     []Route    `json:"routes"`
 	Tests      []string   `json:"tests"`
+	// Docs are Markdown documents kept in the package directory (README.md,
+	// CLAUDE.md, design notes): the owner's own description of the package.
+	Docs []Doc `json:"docs,omitempty"`
 }
+
+// Doc is one Markdown file found in a package directory.
+type Doc struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// maxDocBytes caps one document; larger ones are truncated with a marker.
+const maxDocBytes = 200 * 1024
 
 // TypeDecl is an exported type.
 type TypeDecl struct {
@@ -216,7 +228,20 @@ func analysePackage(fset *token.FileSet, root, rel, modulePath string) (*Package
 
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(name), ".md") {
+			if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+				content := string(b)
+				if len(content) > maxDocBytes {
+					content = content[:maxDocBytes] + "\n\n…(document truncated)\n"
+				}
+				pkg.Docs = append(pkg.Docs, Doc{Name: name, Content: content})
+			}
+			continue
+		}
+		if !strings.HasSuffix(name, ".go") {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -270,6 +295,7 @@ func analysePackage(fset *token.FileSet, root, rel, modulePath string) (*Package
 	if pkg.Files == 0 {
 		return nil, nil
 	}
+	sort.Slice(pkg.Docs, func(i, j int) bool { return pkg.Docs[i].Name < pkg.Docs[j].Name })
 	pkg.Imports = sortedKeys(internal)
 	pkg.External = sortedKeys(external)
 	pkg.Frameworks = sortedKeys(frameworks)

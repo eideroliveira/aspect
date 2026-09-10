@@ -136,6 +136,7 @@ tests. `old(x)` in a post-condition means the value of `x` before the call.
 | `database` | [Database](#7-database) | no | The system's persistent model |
 | `interfaces` | list of [Interface](#8-interfaces) | no | How the system is exposed |
 | `source` | [Source](#11-source-provenance) | no | Provenance of an imported spec |
+| `brief` | path | no | Sidecar document describing the system at length (see [Briefs](#briefs)) |
 
 ```yaml
 system:
@@ -425,6 +426,7 @@ tiers:
 | `stack` | Stack | no | This tier's language configuration |
 | `database` | Database | no | A tier-local database (cache) |
 | `modules` | list of Module | yes, at least one | The tier's modules |
+| `brief` | path | no | Sidecar document for the tier (see [Briefs](#briefs)) |
 
 Rules that hold across tiers: module names are unique across the whole
 spec; `depends_on` between modules never crosses a tier (cross-tier calls go
@@ -480,6 +482,7 @@ modules:
 | `invariants` | list of text | no | Properties that hold in every state |
 | `scenarios` | list of Scenario | no | Given/When/Then examples |
 | `constraints` | list of text | no | Module-specific rules |
+| `brief` | path | no | Sidecar document for the module (see [Briefs](#briefs)) |
 
 Operation: `name` and `signature` (both required), `intent`, `pre`, `post`.
 Signatures are the contract dependents are generated against; keep them
@@ -493,6 +496,29 @@ can be owned by a scenario rather than a whole module.
 
 A module with neither scenarios nor invariants is accepted with a warning:
 its tests are inferred from the interface alone, which is weak evidence.
+
+### Briefs
+
+A brief is a sidecar Markdown file holding a longer, free-form description
+of what a system, tier or module must be: domain rules, seams with other
+parts, the history behind a design, anything that would crowd the YAML. It
+is referenced by path relative to the spec file and loaded with it; a
+missing file fails the load, naming the owner.
+
+```yaml
+modules:
+  - name: translation
+    intent: Orchestrate curriculum translation runs and their publication.
+    brief: briefs/translation.md
+```
+
+Every agent working on the owner sees the whole text under a "brief"
+heading: the Coder and Tester build to it, the Validator judges against it.
+Where a brief is more specific than the spec it is binding; where the two
+conflict, agents are told to raise the conflict in their concerns rather
+than choose silently. `aspect import` turns Markdown documents found in a
+package directory (README.md, CLAUDE.md, design notes) into
+`briefs/<module>.md` next to the recovered spec and references them.
 
 ---
 
@@ -562,6 +588,7 @@ Topology
 - A non-sqlite test engine without `dsn_env`.
 - An external interface without a `service` name; an external surface nobody consumes.
 - `system.language`, `module_path` or `stack` set alongside `tiers`; a `tier` field on a tier-local database; a single tier written under `tiers`.
+- A `brief` that was not loaded (spec parsed from memory) or is empty. A brief path that is absolute or escapes the spec's directory is an error.
 - `operations` listed on a surface with no `entity`.
 - A declared `monolith` with several tiers or with external providers.
 
@@ -577,6 +604,7 @@ Topology
 | database (outline) + owned entities (full) | defines types, schema, write paths | tests persistence against the test database | checks fields, keys, relations, and that no write path exists elsewhere |
 | interfaces (outline) + implemented surfaces (full) | wires routes, pages, commands, screens exactly as specified | exercises them as a client would | checks routes, methods, shapes, errors, auth |
 | consumed surfaces (full) | implements a client against the contract, base address from configuration | stubs the provider | checks the client honours every listed error |
+| brief (system, tier, module) | builds to it; raises conflicts with the YAML in concerns | derives tests from its rules | judges against it |
 | module interface, pre/post | implements the operations | derives tests from the clauses | cites the code that makes them true |
 | invariants | must hold on every path | property-style tests | reads paths tests cannot reach |
 | scenarios | happy and error paths to support | one test per scenario, named after its id | confirms each named test does what the scenario says |
@@ -679,6 +707,7 @@ system:
           auth: text                                    #opt
   source:                                               #opt, written by import
     {language: string, repository: string, commit: string, imported_at: string, frameworks: [string]}
+  brief: relative/path.md                               #opt
 
 modules:                                                # single-tier
   - &module
@@ -695,6 +724,7 @@ modules:                                                # single-tier
     scenarios:                                          #opt
       - {id: string, given: text, when: text, then: text, goals: [goal-id]}
     constraints: [text]                                 #opt
+    brief: relative/path.md                             #opt
 
 tiers:                                                  # multi-tier, instead of modules
   - name: identifier
@@ -704,5 +734,6 @@ tiers:                                                  # multi-tier, instead of
     depends_on: [tier-name]                             #opt
     stack: {<language>: {...}}                          #opt
     database: {...}                                     #opt, tier-local
+    brief: relative/path.md                             #opt
     modules: [*module]
 ```
