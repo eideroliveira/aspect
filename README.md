@@ -91,7 +91,8 @@ It writes the generated Go module to `out/<system>/`, plus `report.json` and a
 human-readable `REPORT.md` with the goal table.
 
 Flags: `-model` (default `claude-opus-5`, or `$ASPECT_MODEL`), `-effort`
-(`low`…`max`), `-max-repairs` (default 3), `-fallbacks=false` to disable
+(`low`…`max`), `-max-repairs` (default 3), `-parallel N` to generate up to
+N independent modules of a tier at once, `-fallbacks=false` to disable
 server-side refusal fallbacks.
 
 ## Importing an existing system
@@ -149,6 +150,8 @@ Early. What exists today:
 - Workspace runner per language with a timeout.
 - Repair loop and per-module, per-goal report, plus a system pass that judges
   goals across modules and checks every provider/consumer contract.
+- Parallel generation of independent modules (`-parallel N`): model calls
+  overlap, tool runs in a workspace stay serialised.
 - Tiers and topologies: monolith, api_backend (backend + frontend in
   different languages, each in its own workspace), cloud_service.
 - `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
@@ -165,7 +168,6 @@ Planned next:
   language-agnostic; only the inventory is Go-specific).
 - A Swift import guard equivalent to the Go one.
 - More target languages: a profile in `internal/lang` is all a language needs.
-- Parallel module generation for independent subgraphs of the plan.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design rationale.
 

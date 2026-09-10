@@ -51,6 +51,15 @@ Modules are generated in topological order so each Coder call sees the real
 source of its dependencies. Ties are broken alphabetically to keep runs
 comparable.
 
+Within a tier, the plan is cut into waves: a module joins the first wave
+after all its dependencies' waves, so modules in one wave are independent.
+With `-parallel N`, up to N modules of a wave run at once. Only the model
+calls overlap; manifest syncs and toolchain runs in a workspace are
+serialised behind a lock, because two `go mod tidy` or `swift build`
+invocations in one tree corrupt each other. The Swift manifest declares
+only targets whose directories exist, so a module still being written
+cannot break another module's build. The report keeps plan order.
+
 ## Verification methods
 
 A goal declares how it can be checked, and the Validator applies a different

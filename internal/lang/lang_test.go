@@ -56,7 +56,12 @@ modules:
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if err := swiftSync(root, s, s.EffectiveTiers()[0], []string{"ledger", "stock"}); err != nil {
+	for _, d := range []string{"Sources/Ledger", "Sources/Stock", "Tests/LedgerTests", "Tests/StockTests"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := swiftSync(root, s, s.EffectiveTiers()[0], []string{"ledger", "stock", "ghost"}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(root, "Package.swift"))
@@ -74,6 +79,9 @@ modules:
 		if !strings.Contains(string(b), want) {
 			t.Errorf("Package.swift lacks %q:\n%s", want, b)
 		}
+	}
+	if strings.Contains(string(b), "Ghost") {
+		t.Fatal("a module without a Sources directory must not be declared")
 	}
 }
 

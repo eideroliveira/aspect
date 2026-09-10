@@ -3,11 +3,14 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/eideroliveira/aspect/internal/agents"
 	"github.com/eideroliveira/aspect/internal/llm"
@@ -356,4 +359,118 @@ func dumpOutputs(rep *Report) string {
 		b.WriteString(m.Module + ": " + m.Error + "\n" + m.TestOutput + "\n")
 	}
 	return b.String()
+}
+
+func TestWavesGroupIndependentModules(t *testing.T) {
+	steps := []plan.Step{
+		{Module: "a"}, {Module: "b"}, {Module: "c", DependsOn: []string{"a"}},
+		{Module: "d", DependsOn: []string{"b", "c"}}, {Module: "e"},
+	}
+	got := waves(steps)
+	want := [][]int{{0, 1, 4}, {2}, {3}}
+	if len(got) != len(want) {
+		t.Fatalf("waves = %v", got)
+	}
+	for i := range want {
+		if strings.Trim(strings.Join(strings.Fields(fmt.Sprint(got[i])), ","), "[]") != strings.Trim(strings.Join(strings.Fields(fmt.Sprint(want[i])), ","), "[]") {
+			t.Fatalf("wave %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+// concurrentLLM answers by agent role and module name, and records how many
+// calls overlapped, so a test can prove modules were generated in parallel.
+type concurrentLLM struct {
+	t       *testing.T
+	answers map[string]string // "coder:a", "tester:a", "validator:a", "system"
+	mu      sync.Mutex
+	active  int
+	maxSeen int
+}
+
+func (c *concurrentLLM) Complete(_ context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.active++
+	if c.active > c.maxSeen {
+		c.maxSeen = c.active
+	}
+	c.mu.Unlock()
+	time.Sleep(150 * time.Millisecond) // long enough for two calls to overlap
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		c.mu.Unlock()
+	}()
+
+	role := ""
+	switch {
+	case strings.HasPrefix(req.System, "You are the Coder"):
+		role = "coder"
+	case strings.HasPrefix(req.System, "You are the Tester"):
+		role = "tester"
+	case strings.HasPrefix(req.System, "You are the Validator"):
+		role = "validator"
+	case strings.HasPrefix(req.System, "You are the System Validator"):
+		return llm.Response{Text: c.answers["system"]}, nil
+	}
+	for key, ans := range c.answers {
+		r, mod, _ := strings.Cut(key, ":")
+		if r == role && strings.Contains(req.Prompt, "\nModule: "+mod+"\n") {
+			return llm.Response{Text: ans}, nil
+		}
+	}
+	c.t.Errorf("no answer for role %s; prompt head: %.120s", role, req.Prompt)
+	return llm.Response{}, context.Canceled
+}
+
+const twoIndependentSpec = `
+aspect: 1
+system:
+  name: pair
+  intent: two things
+  module_path: example.com/pair
+  goals: [{id: G1, statement: both work, verify: test}]
+modules:
+  - {name: alpha, intent: a, goals: [G1], scenarios: [{id: S1, when: A, then: 1}]}
+  - {name: beta, intent: b, goals: [G1], scenarios: [{id: S1, when: B, then: 2}]}
+`
+
+func TestRunGeneratesIndependentModulesInParallel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("invokes the go toolchain")
+	}
+	s, err := spec.Parse([]byte(twoIndependentSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := plan.Build(s)
+	code := func(name string, n int) string {
+		return mustJSON(t, agents.CodeOutput{Files: []workspace.File{{Path: name + "/" + name + ".go", Content: fmt.Sprintf("package %s\n\n// N is the answer.\nfunc N() int { return %d }\n", name, n)}}, Concerns: []string{}})
+	}
+	tests := func(name string, n int) string {
+		return mustJSON(t, agents.TestOutput{Files: []workspace.File{{Path: name + "/" + name + "_test.go", Content: fmt.Sprintf("package %s\n\nimport \"testing\"\n\nfunc TestN_S1(t *testing.T) {\n\tif N() != %d {\n\t\tt.Fatal()\n\t}\n}\n", name, n)}}, Coverage: []agents.ScenarioCoverage{}, Concerns: []string{}})
+	}
+	verdict := func(name string) string {
+		return mustJSON(t, agents.Verdict{Module: name, Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "TestN_S1", Gaps: []string{}, Confidence: 0.9}}, IntentStatus: agents.Aligned, Scenarios: []agents.ScenarioVerdict{}, Recommendations: []string{}})
+	}
+	fake := &concurrentLLM{t: t, answers: map[string]string{
+		"coder:alpha": code("alpha", 1), "tester:alpha": tests("alpha", 1), "validator:alpha": verdict("alpha"),
+		"coder:beta": code("beta", 2), "tester:beta": tests("beta", 2), "validator:beta": verdict("beta"),
+		"system": mustJSON(t, systemVerdict("G1", agents.Achieved)),
+	}}
+	rep, err := New(fake, Options{OutDir: t.TempDir(), MaxRepairs: 1, Parallel: 2, Model: "fake"}).Run(context.Background(), s, p)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, dumpOutputs(rep))
+	}
+	if len(rep.Modules) != 2 || rep.Modules[0].Module != "alpha" || rep.Modules[1].Module != "beta" {
+		t.Fatalf("report order must follow the plan: %+v", rep.Modules)
+	}
+	for _, m := range rep.Modules {
+		if !m.TestsOK {
+			t.Fatalf("%s failed:\n%s", m.Module, m.TestOutput)
+		}
+	}
+	if fake.maxSeen < 2 {
+		t.Fatalf("expected overlapping model calls, max concurrent = %d", fake.maxSeen)
+	}
 }

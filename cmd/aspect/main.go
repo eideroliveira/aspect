@@ -36,6 +36,7 @@ Run flags:
   -model ID         model id (default $ASPECT_MODEL or claude-opus-5)
   -effort LEVEL     low|medium|high|xhigh|max (default high)
   -max-repairs N    coder repair rounds per module (default 3)
+  -parallel N       independent modules generated at once (default 1)
   -fallbacks=false  disable server-side refusal fallbacks
 
 Inventory and import flags:
@@ -165,6 +166,7 @@ func runRun(path string, args []string) error {
 	model := fs.String("model", envOr("ASPECT_MODEL", llm.DefaultModel), "model id")
 	effort := fs.String("effort", "high", "effort level")
 	maxRepairs := fs.Int("max-repairs", 3, "coder repair rounds per module")
+	parallel := fs.Int("parallel", 1, "independent modules generated at once")
 	fallbacks := fs.Bool("fallbacks", true, "server-side refusal fallbacks")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -184,7 +186,7 @@ func runRun(path string, args []string) error {
 
 	client := llm.NewAnthropic(llm.WithModel(*model), llm.WithEffort(*effort), llm.WithFallbacks(*fallbacks))
 	runner := pipeline.New(client, pipeline.Options{
-		OutDir: *out, MaxRepairs: *maxRepairs, Log: os.Stderr, Model: *model,
+		OutDir: *out, MaxRepairs: *maxRepairs, Parallel: *parallel, Log: os.Stderr, Model: *model,
 	})
 	rep, runErr := runner.Run(ctx, s, p)
 	if rep != nil {
