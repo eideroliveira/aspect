@@ -182,6 +182,8 @@ No test touches the network. Contributions follow the conventions in
 
 MIT. See [LICENSE](LICENSE).
 
+## Prompt 
+
 This system was generated from this prompt:
 ```
 I want to create a new project, preserved in github. This project is about aspect agents. I want to build a system of agents, which based on a formal specification of a system, will generate the code, tests and validate if the system and modules intents are achieving the stated goals
