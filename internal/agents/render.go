@@ -255,8 +255,8 @@ func complete(ctx context.Context, c llm.Client, system, prompt string, schema m
 		return resp, err
 	}
 	text := stripFence(resp.Text)
-	if err := json.Unmarshal([]byte(text), out); err != nil {
-		return resp, fmt.Errorf("agent returned invalid JSON: %w\n--- response ---\n%s", err, truncate(text, 2000))
+	if err := decodeLenient([]byte(text), out); err != nil {
+		return resp, err
 	}
 	return resp, nil
 }
