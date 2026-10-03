@@ -92,12 +92,22 @@ def sandbox(repo, case, workdir, agents_src):
     return box
 
 
-def change_block(case, agent, mode):
+def spec_for(box, wanted):
+    """What the orchestrator would pass: the spec path if it exists at head, else none."""
+    if wanted != "auto":
+        return wanted
+    for p in ("aspect.yaml", "_aspect/aspect.yaml"):
+        if (box / p).exists():
+            return p
+    return "none"
+
+
+def change_block(case, agent, mode, spec):
     rv = case["review"]
     return "\n".join([
         f"base: {rv['base']}",
         f"head: {rv['head']}",
-        "spec: aspect.yaml",
+        f"spec: {spec}",
         f"mode: {mode}",
         f"out:  .review/eval/{agent}.json",
     ])
@@ -124,7 +134,7 @@ def agent_version(src, agent):
 
 
 def run_agent(box, case, agent, a):
-    prompt = (f"Review this change.\n\n{change_block(case, agent, a.mode)}\n\n"
+    prompt = (f"Review this change.\n\n{change_block(case, agent, a.mode, spec_for(box, a.spec))}\n\n"
               f"PR title: {case['review']['subject']}\n")
     cmd = ["claude", "-p", prompt, "--agent", agent,
            "--output-format", "json",
@@ -176,6 +186,8 @@ def main():
     ap.add_argument("--workdir", default=os.environ.get("ASPECT_EVAL_WORK", "/tmp/aspect-eval"))
     ap.add_argument("--results", default=str(HERE / "results" / "runs.jsonl"))
     ap.add_argument("--mode", default="advisory")
+    ap.add_argument("--spec", default="auto",
+                    help="spec line of the change block; auto passes 'none' when the head has no spec")
     ap.add_argument("--model", default=None)
     ap.add_argument("--budget", type=float, default=5.0)
     ap.add_argument("--timeout", type=int, default=1800)
