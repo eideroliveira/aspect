@@ -10,7 +10,9 @@
 #         matching files reach min_changed_lines, or when any changed file
 #         matches or_touches.
 
-spec: aspect.yaml
+# spec: the Aspect spec entry point. Omitted, it is _aspect/aspect.yaml, and
+# a repository that still keeps aspect.yaml at its root falls back to that.
+# Set it only to put the spec somewhere else.
 
 gates:
   - agent: spec-keeper
@@ -34,11 +36,11 @@ gates:
             "**/Dockerfile", ".github/**", ".claude/**"]
     mode: gate
   - agent: architect
-    paths: ["aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**", "cmd/**"]
+    paths: ["_aspect/**", "aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**", "cmd/**"]
     mode: advisory
     when:
       min_changed_lines: 200
-      or_touches: ["aspect.yaml", "**/aspect.yaml", "go.mod"]
+      or_touches: ["_aspect/**", "aspect.yaml", "**/aspect.yaml", "go.mod"]
 
 thresholds:
   block: [critical, high]

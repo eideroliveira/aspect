@@ -22,8 +22,10 @@ the most review rounds to run, default 3.
 
 Stop and tell the user what to do if any of these fails:
 
-- The spec named in `.claude/review/gates.yaml` (`spec:`, default
-  `aspect.yaml`) exists and `aspect validate <spec>` is clean. Without a
+- The spec exists and `aspect validate <spec>` is clean. Its path is the
+  `spec` that `aspect gate plan` prints: `spec:` in
+  `.claude/review/gates.yaml`, by default `_aspect/aspect.yaml` or, failing
+  that, a root `aspect.yaml`; `none` means there is no spec. Without a
   spec there is no contract to implement: offer to run `spec-keeper` in
   `author` mode to bootstrap one (docs/design.md §4.1).
 - The working tree is clean (`git status --porcelain` is empty). Ask the

@@ -17,6 +17,15 @@ import (
 // DefaultConfigPath is where gates.yaml lives in a repository.
 const DefaultConfigPath = ".claude/review/gates.yaml"
 
+// DefaultSpec is where a repository keeps its Aspect spec: the entry point
+// inside _aspect/, next to the files it includes and its briefs, so the spec
+// is one directory rather than files scattered at the root.
+const DefaultSpec = "_aspect/aspect.yaml"
+
+// LegacySpec is the root entry point used before _aspect/. When gates.yaml
+// names no spec and DefaultSpec is absent, the plan falls back to it.
+const LegacySpec = "aspect.yaml"
+
 // Severities in order of consequence, most severe first.
 var Severities = []string{"critical", "high", "medium", "low", "info"}
 
@@ -33,6 +42,10 @@ type Config struct {
 	Gates           []Gate     `yaml:"gates" json:"gates"`
 	Thresholds      Thresholds `yaml:"thresholds" json:"thresholds"`
 	PublicRedaction []string   `yaml:"public_redaction" json:"public_redaction"`
+
+	// specDefaulted records that gates.yaml named no spec, so ResolveSpec
+	// may fall back to LegacySpec.
+	specDefaulted bool
 }
 
 // Gate binds an agent to the paths whose changes it reviews.
@@ -80,7 +93,7 @@ func ParseConfig(b []byte) (*Config, error) {
 		return nil, err
 	}
 	if c.Spec == "" {
-		c.Spec = "aspect.yaml"
+		c.Spec, c.specDefaulted = DefaultSpec, true
 	}
 	if c.Thresholds.Block == nil && c.Thresholds.Warn == nil {
 		c.Thresholds.Block = []string{"critical", "high"}
@@ -133,6 +146,19 @@ func whenTouches(w *When) []string {
 		return nil
 	}
 	return w.OrTouches
+}
+
+// ResolveSpec returns the spec entry point the plan names: the configured
+// spec when exists reports it present at head, LegacySpec when gates.yaml
+// named none and only the root file exists, and NoSpec otherwise.
+func (c *Config) ResolveSpec(exists func(path string) bool) string {
+	if exists(c.Spec) {
+		return c.Spec
+	}
+	if c.specDefaulted && exists(LegacySpec) {
+		return LegacySpec
+	}
+	return NoSpec
 }
 
 // gateFor returns the configured gate for an agent.
