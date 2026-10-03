@@ -10,6 +10,11 @@ import (
 // PlanSchema identifies a plan document.
 const PlanSchema = "aspect-gate-plan/v1"
 
+// NoSpec is the plan's spec when the configured spec does not exist at
+// head. Agents receive it in the change block and do not look for or report
+// the missing spec; the rendered result states it once.
+const NoSpec = "none"
+
 // Change is one file a diff touched, with its line counts. Binary files
 // count zero lines.
 type Change struct {
@@ -42,9 +47,15 @@ type Planned struct {
 
 // BuildPlan decides which gates apply to the changes, in the order
 // gates.yaml lists them. A gate applies when at least one changed file
-// matches its paths and its When condition, if any, holds.
-func BuildPlan(c *Config, base, head string, changes []Change) *Plan {
-	p := &Plan{Schema: PlanSchema, Spec: c.Spec, Base: base, Head: head, ChangedFiles: len(changes), Agents: []Planned{}}
+// matches its paths and its When condition, if any, holds. specExists says
+// whether the configured spec is present at head; when it is not, the plan's
+// spec is NoSpec.
+func BuildPlan(c *Config, base, head string, changes []Change, specExists bool) *Plan {
+	spec := c.Spec
+	if !specExists {
+		spec = NoSpec
+	}
+	p := &Plan{Schema: PlanSchema, Spec: spec, Base: base, Head: head, ChangedFiles: len(changes), Agents: []Planned{}}
 	for _, ch := range changes {
 		p.ChangedLines += ch.Added + ch.Deleted
 	}

@@ -45,12 +45,13 @@ optional `files`, `handoff`, `pr`). Your modes:
 - `gate`: report drift; change nothing.
 - `author`: edit the spec files and briefs to close deliberate drift, then
   report what you changed.
-- bootstrap: `author` mode when the `spec` file does not exist.
+- bootstrap: `author` mode with `spec: none`; write the new spec to
+  `aspect.yaml` unless the caller names another path.
 
-When the `spec` file does not exist and you are in `gate` or `advisory`
-mode, report exactly one `info` finding with `location: {"file": "<spec>"}`
-(no line) that recommends a bootstrap run, and no `spec-drift` findings: a
-repository without a spec has nothing to drift from yet.
+With `spec: none` in `gate` or `advisory` mode, stop after reading the
+change block: write a report with no findings and the summary "No spec;
+nothing to keep in lockstep." The orchestrator already tells the reader the
+spec is missing, so do not report it again.
 
 ## Procedure
 

@@ -139,12 +139,12 @@ func TestBuildPlan(t *testing.T) {
 		{"nothing", nil, nil},
 	}
 	for _, tc := range cases {
-		p := BuildPlan(c, "b", "h", tc.changes)
+		p := BuildPlan(c, "b", "h", tc.changes, true)
 		if got := agents(p); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: agents = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	p := BuildPlan(c, "b", "h", []Change{{Path: "a.go", Added: 1}, {Path: "README.md", Added: 4, Deleted: 1}})
+	p := BuildPlan(c, "b", "h", []Change{{Path: "a.go", Added: 1}, {Path: "README.md", Added: 4, Deleted: 1}}, true)
 	if p.ChangedFiles != 2 || p.ChangedLines != 6 {
 		t.Errorf("counts = %d files, %d lines", p.ChangedFiles, p.ChangedLines)
 	}
@@ -232,7 +232,7 @@ func plan(c *Config, files ...string) *Plan {
 	for _, f := range files {
 		ch = append(ch, Change{Path: f, Added: 1})
 	}
-	return BuildPlan(c, "aaaaaaa1", "bbbbbbb2", ch)
+	return BuildPlan(c, "aaaaaaa1", "bbbbbbb2", ch, true)
 }
 
 func TestCheck(t *testing.T) {
@@ -484,5 +484,20 @@ func TestWholeFileLocation(t *testing.T) {
 	out := Render(c, p, Check(c, p, map[string]Input{"spec-keeper": {Data: report("spec-keeper", "gate", f)}}, false), RenderOptions{})
 	if !strings.Contains(out, "`aspect.yaml`") || strings.Contains(out, "aspect.yaml:0") {
 		t.Errorf("whole-file location rendered wrongly:\n%s", out)
+	}
+}
+
+func TestNoSpec(t *testing.T) {
+	c := mustConfig(t)
+	p := BuildPlan(c, "aaaaaaa1", "bbbbbbb2", []Change{{Path: "README.md", Added: 1}}, false)
+	if p.Spec != NoSpec {
+		t.Fatalf("spec = %q, want %q", p.Spec, NoSpec)
+	}
+	out := Render(c, p, Check(c, p, map[string]Input{"spec-keeper": {Data: report("spec-keeper", "gate")}}, false), RenderOptions{})
+	if strings.Count(out, "No spec:") != 1 || !strings.Contains(out, "`aspect.yaml` does not exist") {
+		t.Errorf("render should state the missing spec once:\n%s", out)
+	}
+	if p := BuildPlan(c, "a", "b", nil, true); p.Spec != "aspect.yaml" {
+		t.Errorf("spec = %q with the spec present", p.Spec)
 	}
 }

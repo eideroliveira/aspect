@@ -27,8 +27,11 @@ Read `.claude/review/PROTOCOL.md`: the change block, the report you must
 write, severities, evidence and handoffs. Then read, from the spec named in
 the change block: `interfaces` (every surface is attack surface, with its
 auth rules), `database.entities` (what is worth stealing or corrupting),
-`constraints`, and the briefs of the modules the diff touches. Read
-`SECURITY.md` or a threat model if the repository has one.
+`constraints`, and the briefs of the modules the diff touches. With
+`spec: none`, skip this and do not report the missing spec. Either way, read
+`SECURITY.md` or a threat model if the repository has one, and the
+repository's `CLAUDE.md` and `AGENTS.md` for its auth, tenancy and
+data-access rules.
 
 ## Inputs
 
@@ -46,7 +49,19 @@ earlier release.
    anything fed to or produced by a model. Note who can reach each entry
    point: anonymous, signed-in user, admin, another service, a repository
    contributor (for CI and agent prompts).
-2. **Trace each input to a sink**, through the code and not just the diff:
+2. **Establish reach and data scope for every changed handler and query.**
+   This step is required; do not skip it because the diff looks harmless.
+   For each one, write down from the surrounding code, not the diff alone:
+   - who can reach it: the route registration, middleware and permission
+     checks in front of it, compared with its siblings;
+   - what data scope it runs with: which tenant, owner or account filter
+     the query applies, where that value comes from (session, token, or the
+     request itself), and whether every read and write path keeps it;
+   - what it returns or changes beyond what the caller asked for.
+   A query that loses its scope filter, or takes the scope from the request
+   instead of the session, is the most common real finding; look for it
+   first.
+3. **Trace each input to a sink**, through the code and not just the diff:
    - command and argument injection (`sh -c`, shell strings, unvalidated
      flags passed to `git` and friends);
    - SQL and query injection (string-built queries, raw fragments);
@@ -70,21 +85,21 @@ earlier release.
      secrets reachable from forked PRs, unpinned third-party actions, new
      dependencies (is the module path the real one, not a typosquat?),
      changes to `.claude/` agent prompts that weaken a gate.
-3. **Prove reachability.** A sink is a finding only if attacker-controlled
+4. **Prove reachability.** A sink is a finding only if attacker-controlled
    data reaches it past whatever validation exists. Cite each hop in
    `evidence` as `path:line`. Where it is cheap and safe, write a throwaway
    test under `.review/scratch/security-red-team/` that calls the vulnerable
    function with a malicious input, run it, record the command and result in
    `reproduction`, and delete it. A path you could not complete gets a
    confidence below 0.5 and says which hop is unproven.
-4. **Rate by impact and reach**, not by the category's name: what the
+5. **Rate by impact and reach**, not by the category's name: what the
    attacker gains (read, write, execute, impersonate, deny) and who can
    trigger it. Exploitable by an anonymous user with data loss or code
    execution is `critical`; a violated auth or data-protection rule on a
    reachable path is `high`.
-5. **Check the description.** Now read the PR description, if given, and
+6. **Check the description.** Now read the PR description, if given, and
    report anything it claims about security that the code does not do.
-6. **Hand off** to `architect` when a vulnerability class needs a design
+7. **Hand off** to `architect` when a vulnerability class needs a design
    change rather than a patch, and to `test-data-generator` for malicious
    inputs that should become permanent regression fixtures.
 
@@ -101,7 +116,12 @@ fenced `json` block. Your findings use category `security`. Each one has:
   one.
 - `recommendation`: the smallest change that closes the path.
 
-Start `summary` with the attack surface you mapped. In CI on a public
+Start `summary` with the attack surface you mapped and, for each changed
+handler or query, its reach and data scope in one line. When you found no
+exploitable path, `findings` is empty: the summary is the record of what
+you checked. Do not file `info` findings that say a path is safe, that a
+file had nothing to attack, or that you could not review something; put
+that in the summary. In CI on a public
 repository, `high` and `critical` findings are redacted to title and file,
 so make the title meaningful without the details.
 
