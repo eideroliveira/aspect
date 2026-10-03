@@ -9,7 +9,7 @@ data, write the documentation, and script videocasts of user-facing
 features.
 
 The agents are open source and meant to be dropped into any repository. Their
-first real user is gosite, a large Go codebase; they are developed and
+first real user is gosite, a Go codebase; they are developed and
 versioned here, in the Aspect repository. A repository with no `aspect.yaml` yet
 starts with the spec keeper's bootstrap (section 4.1).
 
