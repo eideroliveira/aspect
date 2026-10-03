@@ -170,7 +170,7 @@ of the code, not the owner's statement of it.
 
 Aspect also ships Claude Code subagents that keep reviewing a product after
 the first build. Copy `.claude/agents/`, `.claude/review/` and
-`.claude/commands/review.md` into a repository and install `aspect`:
+`.claude/commands/` into a repository and install `aspect`:
 
 | Agent | Mode | What it does |
 |---|---|---|
@@ -195,6 +195,12 @@ an `ANTHROPIC_API_KEY` secret (agents run in Claude Code) or a
 `.claude/review/gemini-policy.toml`); with both, set the repository variable
 `REVIEW_GATES_PROVIDER=gemini` to prefer Gemini. The design is in
 [docs/design.md](docs/design.md).
+
+`/implement [spec ref]` closes the loop from the other side: the main
+Claude Code session builds what the spec states and the code lacks, with a
+test per operation contract, invariant and scenario, then runs `/review`
+and fixes blocking findings until `aspect gate check` passes or a finding
+needs a human. It commits on a branch and never pushes.
 
 ## Status
 
