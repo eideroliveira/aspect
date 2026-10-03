@@ -26,3 +26,6 @@ coverage.*
 
 # Review agent reports (per run)
 /.review/
+
+# Review gate runs (reports, transcripts, scratch)
+.review/

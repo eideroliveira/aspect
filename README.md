@@ -166,6 +166,33 @@ re-run import only pays for packages not yet described. Review the recovered
 intents and goals before running the pipeline: they are the model's reading
 of the code, not the owner's statement of it.
 
+## Review gates
+
+Aspect also ships Claude Code subagents that keep reviewing a product after
+the first build. Copy `.claude/agents/`, `.claude/review/` and
+`.claude/commands/review.md` into a repository and install `aspect`:
+
+| Agent | Mode | What it does |
+|---|---|---|
+| `spec-keeper` | gate, author | keeps the Aspect spec in lockstep with the code; blocks drift, writes the spec edits |
+| `adversarial-reviewer` | gate | tries to break the change: correctness, edge cases, concurrency, performance |
+| `security-red-team` | gate | attacks the change: every finding has an exploit path |
+
+Each agent writes a JSON report (`.claude/review/report.schema.json`);
+`aspect gate` decides the outcome from the reports and
+`.claude/review/gates.yaml`, so no agent grades its own work:
+
+```sh
+aspect gate plan -base origin/main -o .review/run/plan.json  # which agents apply
+aspect gate check  .review/run                               # exit 1 when a gate blocks
+aspect gate render .review/run                               # the PR comment
+```
+
+`/review` runs the same sequence locally, and
+`.github/workflows/review-gates.yml` runs it on every pull request (it needs
+an `ANTHROPIC_API_KEY` secret). The design is in
+[docs/design.md](docs/design.md).
+
 ## Status
 
 Early. What exists today:

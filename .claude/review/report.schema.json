@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/eideroliveira/aspect/.claude/review/report.schema.json",
+  "title": "Aspect review report",
+  "description": "What every review agent writes at the end of a run (docs/design.md section 2.5). Agents never state a verdict; `aspect gate check` computes it. internal/gate/report.go enforces the same rules and a test keeps the two in sync.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "agent",
+    "mode",
+    "base",
+    "head",
+    "summary",
+    "findings",
+    "handoffs",
+    "changes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "aspect-review/v1"
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The agent's name, which is its file name in .claude/agents without .md."
+    },
+    "mode": {
+      "enum": [
+        "gate",
+        "advisory",
+        "author"
+      ]
+    },
+    "base": {
+      "type": "string",
+      "description": "The base revision as passed in the change block."
+    },
+    "head": {
+      "type": "string",
+      "description": "The head revision as passed in the change block."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What was checked and what was found. An empty findings list still needs a summary of what was checked."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "handoffs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/handoff"
+      }
+    },
+    "changes": {
+      "type": "array",
+      "description": "Files an authoring agent wrote. Must be empty outside author mode.",
+      "items": {
+        "$ref": "#/$defs/written"
+      }
+    },
+    "adrs": {
+      "type": "array",
+      "description": "Architecture decision records an agent proposes (the architect). Optional. The orchestrator writes an accepted one to docs/adr/NNNN-<slug>.md; agents never write it themselves.",
+      "items": {
+        "$ref": "#/$defs/adr"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "title",
+        "evidence",
+        "recommendation",
+        "confidence"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the report, conventionally <agent>/<n>."
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ]
+        },
+        "category": {
+          "enum": [
+            "correctness",
+            "spec-drift",
+            "security",
+            "performance",
+            "design",
+            "test-gap",
+            "docs",
+            "data"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "spec_ref": {
+          "type": "string",
+          "description": "The goal, module, invariant, scenario or surface, in the spec's own reference syntax."
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "reproduction": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "if": {
+        "properties": {
+          "severity": {
+            "not": {
+              "const": "info"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "location"
+        ]
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "line"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository-relative path in the head version."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "reason"
+      ],
+      "properties": {
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "written": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "reason"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "adr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug",
+        "title",
+        "body"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "File name part after the number, kebab-case."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding": {
+          "type": "string",
+          "description": "Id of the finding this ADR answers, if any."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The ADR in Markdown: context, decision, consequences, alternatives."
+        }
+      }
+    }
+  }
+}

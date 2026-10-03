@@ -1,0 +1,450 @@
+package gate
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const testConfig = `
+spec: aspect.yaml
+gates:
+  - agent: spec-keeper
+    paths: ["**"]
+    mode: gate
+  - agent: adversarial-reviewer
+    paths: ["**/*.go"]
+    mode: gate
+  - agent: security-red-team
+    paths: ["**/*.go", ".github/**"]
+    mode: gate
+  - agent: architect
+    paths: ["internal/**", "go.mod"]
+    mode: advisory
+    when: {min_changed_lines: 100, or_touches: ["go.mod"]}
+thresholds:
+  block: [critical, high]
+  warn: [medium, low]
+  min_confidence_to_block: 0.5
+public_redaction: [critical, high]
+`
+
+func mustConfig(t *testing.T) *Config {
+	t.Helper()
+	c, err := ParseConfig([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestMatch(t *testing.T) {
+	cases := []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"**", "a/b/c.go", true},
+		{"**/*.go", "main.go", true},
+		{"**/*.go", "internal/gate/plan.go", true},
+		{"**/*.go", "internal/gate/plan.md", false},
+		{".github/**", ".github/workflows/ci.yml", true},
+		{".github/**", "github/x", false},
+		{"internal/**", "internal", true},
+		{"go.mod", "go.mod", true},
+		{"go.mod", "sub/go.mod", false},
+		{"**/aspect.yaml", "aspect.yaml", true},
+		{"**/aspect.yaml", "examples/shop/aspect.yaml", true},
+		{"cmd/*/main.go", "cmd/aspect/main.go", true},
+		{"cmd/*/main.go", "cmd/a/b/main.go", false},
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/y/b", true},
+	}
+	for _, c := range cases {
+		if got := Match(c.pattern, c.name); got != c.want {
+			t.Errorf("Match(%q, %q) = %v, want %v", c.pattern, c.name, got, c.want)
+		}
+	}
+}
+
+func TestParseConfigRejects(t *testing.T) {
+	cases := map[string]string{
+		"unknown key":      "gates: [{agent: a, paths: ['**'], mode: gate, extra: 1}]",
+		"no gates":         "spec: x.yaml",
+		"bad mode":         "gates: [{agent: a, paths: ['**'], mode: author}]",
+		"duplicate agent":  "gates: [{agent: a, paths: ['**'], mode: gate}, {agent: a, paths: ['x'], mode: gate}]",
+		"no paths":         "gates: [{agent: a, mode: gate}]",
+		"bad pattern":      "gates: [{agent: a, paths: ['[x'], mode: gate}]",
+		"unknown severity": "gates: [{agent: a, paths: ['**'], mode: gate}]\nthresholds: {block: [severe]}",
+		"block and warn":   "gates: [{agent: a, paths: ['**'], mode: gate}]\nthresholds: {block: [high], warn: [high]}",
+		"confidence range": "gates: [{agent: a, paths: ['**'], mode: gate}]\nthresholds: {block: [high], min_confidence_to_block: 2}",
+	}
+	for name, y := range cases {
+		if _, err := ParseConfig([]byte(y)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestParseConfigDefaults(t *testing.T) {
+	c, err := ParseConfig([]byte("gates: [{agent: a, paths: ['**'], mode: gate}]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec != "aspect.yaml" || !slices.Equal(c.Thresholds.Block, []string{"critical", "high"}) {
+		t.Errorf("defaults not applied: %+v", c)
+	}
+}
+
+func TestRepositoryGatesYAML(t *testing.T) {
+	c, err := LoadConfig(filepath.Join("..", "..", DefaultConfigPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Advisory agents may ship separately; a missing one only warns at run
+	// time. A gate-mode agent without a file would block every PR.
+	for _, g := range c.Gates {
+		if g.Mode != "gate" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("..", "..", ".claude", "agents", g.Agent+".md")); err != nil {
+			t.Errorf("gates.yaml names %s, which has no agent file: %v", g.Agent, err)
+		}
+	}
+}
+
+func agents(p *Plan) []string {
+	var out []string
+	for _, a := range p.Agents {
+		out = append(out, a.Agent)
+	}
+	return out
+}
+
+func TestBuildPlan(t *testing.T) {
+	c := mustConfig(t)
+	cases := []struct {
+		name    string
+		changes []Change
+		want    []string
+	}{
+		{"docs only", []Change{{Path: "README.md", Added: 3}}, []string{"spec-keeper"}},
+		{"small go change", []Change{{Path: "internal/gate/plan.go", Added: 10, Deleted: 2}}, []string{"spec-keeper", "adversarial-reviewer", "security-red-team"}},
+		{"large internal change", []Change{{Path: "internal/gate/plan.go", Added: 90, Deleted: 20}}, []string{"spec-keeper", "adversarial-reviewer", "security-red-team", "architect"}},
+		{"go.mod touch", []Change{{Path: "go.mod", Added: 1}}, []string{"spec-keeper", "architect"}},
+		{"ci change", []Change{{Path: ".github/workflows/ci.yml", Added: 1}}, []string{"spec-keeper", "security-red-team"}},
+		{"nothing", nil, nil},
+	}
+	for _, tc := range cases {
+		p := BuildPlan(c, "b", "h", tc.changes)
+		if got := agents(p); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: agents = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	p := BuildPlan(c, "b", "h", []Change{{Path: "a.go", Added: 1}, {Path: "README.md", Added: 4, Deleted: 1}})
+	if p.ChangedFiles != 2 || p.ChangedLines != 6 {
+		t.Errorf("counts = %d files, %d lines", p.ChangedFiles, p.ChangedLines)
+	}
+	if ar, _ := p.Agent("adversarial-reviewer"); !slices.Equal(ar.Files, []string{"a.go"}) {
+		t.Errorf("adversarial-reviewer files = %v", ar.Files)
+	}
+}
+
+// report builds a valid report JSON for an agent, with the given findings.
+func report(agent, mode string, findings ...Finding) []byte {
+	r := Report{Schema: ReportSchema, Agent: agent, Mode: mode, Base: "aaaaaaa1", Head: "bbbbbbb2", Summary: "checked", Findings: findings, Handoffs: []Handoff{}, Changes: []Written{}}
+	if r.Findings == nil {
+		r.Findings = []Finding{}
+	}
+	b, _ := json.Marshal(r)
+	return b
+}
+
+func finding(id, severity string, confidence float64) Finding {
+	return Finding{ID: id, Severity: severity, Category: "correctness", Title: "t", Location: &Location{File: "a.go", Line: 3}, Evidence: "e", Recommendation: "r", Confidence: confidence}
+}
+
+func TestDecodeReport(t *testing.T) {
+	if _, err := DecodeReport(report("a", "gate", finding("a/1", "high", 0.9))); err != nil {
+		t.Fatalf("valid report rejected: %v", err)
+	}
+	valid := string(report("a", "gate", finding("a/1", "high", 0.9)))
+	cases := map[string]string{
+		"unknown field":       strings.Replace(valid, `"summary"`, `"verdict":"pass","summary"`, 1),
+		"missing handoffs":    strings.Replace(valid, `"handoffs":[],`, ``, 1),
+		"missing confidence":  strings.Replace(valid, `,"confidence":0.9`, ``, 1),
+		"wrong schema":        strings.Replace(valid, ReportSchema, "aspect-review/v0", 1),
+		"bad severity":        strings.Replace(valid, `"high"`, `"severe"`, 1),
+		"bad category":        strings.Replace(valid, `"correctness"`, `"style"`, 1),
+		"confidence too high": strings.Replace(valid, `0.9`, `1.5`, 1),
+		"trailing data":       valid + `{}`,
+		"empty summary":       strings.Replace(valid, `"checked"`, `""`, 1),
+		"zero line":           strings.Replace(valid, `"line":3`, `"line":0`, 1),
+		"no location":         strings.Replace(valid, `"location":{"file":"a.go","line":3},`, ``, 1),
+	}
+	for name, doc := range cases {
+		if _, err := DecodeReport([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	info := finding("a/1", "info", 1)
+	info.Location = nil
+	if _, err := DecodeReport(report("a", "gate", info)); err != nil {
+		t.Errorf("info finding without location rejected: %v", err)
+	}
+	dup := report("a", "gate", finding("a/1", "low", 1), finding("a/1", "low", 1))
+	if _, err := DecodeReport(dup); err == nil {
+		t.Error("duplicate finding ids accepted")
+	}
+	var r Report
+	json.Unmarshal(report("a", "gate"), &r)
+	r.Changes = []Written{{File: "x", Reason: "y"}}
+	if r.Validate() == nil {
+		t.Error("gate report with changes accepted")
+	}
+}
+
+func TestDecodeReportADRs(t *testing.T) {
+	var r Report
+	json.Unmarshal(report("architect", "advisory", finding("architect/1", "medium", 0.8)), &r)
+	r.ADRs = []ADR{{Slug: "split-gate-package", Title: "Split", Finding: "architect/1", Body: "## Context"}}
+	b, _ := json.Marshal(r)
+	if _, err := DecodeReport(b); err != nil {
+		t.Fatalf("valid ADR rejected: %v", err)
+	}
+	for name, a := range map[string]ADR{
+		"bad slug":        {Slug: "Split Gate", Title: "t", Body: "b"},
+		"no body":         {Slug: "s", Title: "t"},
+		"unknown finding": {Slug: "s", Title: "t", Body: "b", Finding: "architect/9"},
+	} {
+		r.ADRs = []ADR{a}
+		if r.Validate() == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func plan(c *Config, files ...string) *Plan {
+	var ch []Change
+	for _, f := range files {
+		ch = append(ch, Change{Path: f, Added: 1})
+	}
+	return BuildPlan(c, "aaaaaaa1", "bbbbbbb2", ch)
+}
+
+func TestCheck(t *testing.T) {
+	c := mustConfig(t)
+	p := plan(c, "a.go") // spec-keeper, adversarial-reviewer, security-red-team
+	clean := map[string]Input{
+		"spec-keeper":          {Data: report("spec-keeper", "gate")},
+		"adversarial-reviewer": {Data: report("adversarial-reviewer", "gate")},
+		"security-red-team":    {Data: report("security-red-team", "gate")},
+	}
+	with := func(agent string, in Input) map[string]Input {
+		m := map[string]Input{}
+		for k, v := range clean {
+			m[k] = v
+		}
+		m[agent] = in
+		return m
+	}
+	without := func(agent string) map[string]Input {
+		m := with(agent, Input{})
+		delete(m, agent)
+		return m
+	}
+	cases := []struct {
+		name    string
+		reports map[string]Input
+		want    string
+	}{
+		{"all clean", clean, Pass},
+		{"high finding blocks", with("adversarial-reviewer", Input{Data: report("adversarial-reviewer", "gate", finding("x/1", "high", 0.9))}), Block},
+		{"low confidence high only warns", with("adversarial-reviewer", Input{Data: report("adversarial-reviewer", "gate", finding("x/1", "high", 0.4))}), Warn},
+		{"medium warns", with("spec-keeper", Input{Data: report("spec-keeper", "gate", finding("x/1", "medium", 1))}), Warn},
+		{"info passes", with("spec-keeper", Input{Data: report("spec-keeper", "gate", Finding{ID: "x/1", Severity: "info", Category: "docs", Title: "t", Confidence: 1})}), Pass},
+		{"missing report blocks", without("security-red-team"), Block},
+		{"unreadable report blocks", with("security-red-team", Input{Err: errors.New("boom")}), Block},
+		{"malformed report blocks", with("security-red-team", Input{Data: []byte(`{"schema":"aspect-review/v1"}`)}), Block},
+		{"report from another agent blocks", with("security-red-team", Input{Data: report("spec-keeper", "gate")}), Block},
+		{"report in wrong mode blocks", with("security-red-team", Input{Data: report("security-red-team", "advisory")}), Block},
+	}
+	for _, tc := range cases {
+		r := Check(c, p, tc.reports, false)
+		if r.Outcome != tc.want {
+			t.Errorf("%s: outcome = %s, want %s (%+v)", tc.name, r.Outcome, tc.want, r.Agents)
+		}
+		if r.Failed() != (tc.want == Block) {
+			t.Errorf("%s: Failed() = %v", tc.name, r.Failed())
+		}
+	}
+
+	stale := report("spec-keeper", "gate")
+	stale = []byte(strings.Replace(string(stale), "bbbbbbb2", "ccccccc3", 1))
+	if r := Check(c, p, with("spec-keeper", Input{Data: stale}), false); r.Outcome != Block {
+		t.Errorf("stale report: outcome = %s", r.Outcome)
+	}
+
+	blocked := with("adversarial-reviewer", Input{Data: report("adversarial-reviewer", "gate", finding("x/1", "critical", 1))})
+	r := Check(c, p, blocked, true)
+	if r.Outcome != Overridden || r.Failed() {
+		t.Errorf("override: outcome = %s, failed = %v", r.Outcome, r.Failed())
+	}
+}
+
+func TestCheckAdvisoryNeverBlocks(t *testing.T) {
+	c := mustConfig(t)
+	p := plan(c, "go.mod") // spec-keeper (gate), architect (advisory)
+	reports := map[string]Input{
+		"spec-keeper": {Data: report("spec-keeper", "gate")},
+		"architect":   {Data: report("architect", "advisory", finding("architect/1", "critical", 1))},
+	}
+	if r := Check(c, p, reports, false); r.Outcome != Warn {
+		t.Errorf("advisory critical: outcome = %s, want warn", r.Outcome)
+	}
+	delete(reports, "architect")
+	if r := Check(c, p, reports, false); r.Outcome != Warn {
+		t.Errorf("advisory missing: outcome = %s, want warn", r.Outcome)
+	}
+}
+
+func TestCheckSortsBySeverity(t *testing.T) {
+	c := mustConfig(t)
+	p := plan(c, "README.md")
+	r := Check(c, p, map[string]Input{"spec-keeper": {Data: report("spec-keeper", "gate",
+		finding("s/1", "low", 1), finding("s/2", "high", 1), finding("s/3", "medium", 1), finding("s/4", "critical", 1))}}, false)
+	a := r.Agents[0]
+	if a.Blocking[0].ID != "s/4" || a.Blocking[1].ID != "s/2" || a.Warnings[0].ID != "s/3" || a.Warnings[1].ID != "s/1" {
+		t.Errorf("not sorted: blocking %v warnings %v", a.Blocking, a.Warnings)
+	}
+}
+
+func TestRender(t *testing.T) {
+	c := mustConfig(t)
+	p := plan(c, "a.go")
+	sec := finding("security-red-team/1", "high", 0.9)
+	sec.Category = "security"
+	sec.Title = "SQL injection in <b>search</b>"
+	sec.Evidence = "secret exploit path"
+	reports := map[string]Input{
+		"spec-keeper":          {Data: report("spec-keeper", "gate")},
+		"adversarial-reviewer": {Data: report("adversarial-reviewer", "gate", finding("adversarial-reviewer/1", "medium", 0.8))},
+		"security-red-team":    {Data: report("security-red-team", "gate", sec)},
+	}
+	r := Check(c, p, reports, false)
+
+	private := Render(c, p, r, RenderOptions{})
+	for _, want := range []string{CommentMarker, "Review gates: blocked", "| security-red-team | gate | ok | 1 | 0 |", "secret exploit path", "&lt;b&gt;search&lt;/b&gt;"} {
+		if !strings.Contains(private, want) {
+			t.Errorf("private render lacks %q:\n%s", want, private)
+		}
+	}
+	if strings.Contains(private, "<b>") {
+		t.Error("model text was not escaped")
+	}
+
+	public := Render(c, p, r, RenderOptions{Public: true})
+	if strings.Contains(public, "secret exploit path") || !strings.Contains(public, "details withheld") {
+		t.Errorf("public render did not redact:\n%s", public)
+	}
+	if !strings.Contains(public, "a.go:3") {
+		t.Error("public render dropped the file")
+	}
+	if strings.Count(public, CommentMarker) != 1 {
+		t.Error("marker must appear exactly once")
+	}
+
+	empty := Render(c, plan(c), Check(c, plan(c), nil, false), RenderOptions{})
+	if !strings.Contains(empty, "No gate applies") {
+		t.Errorf("empty plan render:\n%s", empty)
+	}
+}
+
+// TestSchemaMatchesValidator keeps report.schema.json and the Go validator
+// describing the same document.
+func TestSchemaMatchesValidator(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", ".claude", "review", "report.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		AdditionalProperties *bool               `json:"additionalProperties"`
+		Required             []string            `json:"required"`
+		Properties           map[string]struct{} `json:"properties"`
+		Defs                 map[string]struct {
+			AdditionalProperties *bool `json:"additionalProperties"`
+			Required             []string
+			Properties           map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.AdditionalProperties == nil || *s.AdditionalProperties {
+		t.Error("report must have additionalProperties: false")
+	}
+	for name, d := range s.Defs {
+		if d.AdditionalProperties == nil || *d.AdditionalProperties {
+			t.Errorf("$defs.%s must have additionalProperties: false", name)
+		}
+	}
+	f := s.Defs["finding"].Properties
+	if !slices.Equal(f["severity"].Enum, Severities) {
+		t.Errorf("severity enum %v, Go has %v", f["severity"].Enum, Severities)
+	}
+	if !slices.Equal(f["category"].Enum, Categories) {
+		t.Errorf("category enum %v, Go has %v", f["category"].Enum, Categories)
+	}
+	// Every Go field is a schema property and vice versa.
+	jsonKeys := func(v any) []string {
+		b, _ := json.Marshal(v)
+		var m map[string]any
+		json.Unmarshal(b, &m)
+		var keys []string
+		for k := range m {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	schemaKeys := func(m map[string]struct{}) []string {
+		var keys []string
+		for k := range m {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	full := Report{ADRs: []ADR{{}}}
+	if got, want := jsonKeys(full), schemaKeys(s.Properties); !slices.Equal(got, want) {
+		t.Errorf("report keys: Go %v, schema %v", got, want)
+	}
+	fullFinding := Finding{Location: &Location{EndLine: 1}}
+	fp := map[string]struct{}{}
+	for k := range f {
+		fp[k] = struct{}{}
+	}
+	if got, want := jsonKeys(fullFinding), schemaKeys(fp); !slices.Equal(got, want) {
+		t.Errorf("finding keys: Go %v, schema %v", got, want)
+	}
+}
+
+func TestLastJSONBlock(t *testing.T) {
+	text := "Summary.\n\n```json\n{\"first\": 1}\n```\n\nMore.\n\n```json\n{\"last\": 2}\n```\n"
+	b, err := LastJSONBlock(text)
+	if err != nil || strings.TrimSpace(string(b)) != `{"last": 2}` {
+		t.Errorf("got %q, %v", b, err)
+	}
+	if _, err := LastJSONBlock("no block here"); err == nil {
+		t.Error("missing block accepted")
+	}
+	b, err = LastJSONBlock("```json\n{\"a\": 1}\n```\n```json\n{\"unterminated\"")
+	if err != nil || strings.TrimSpace(string(b)) != `{"a": 1}` {
+		t.Errorf("unterminated trailing block: got %q, %v", b, err)
+	}
+}
