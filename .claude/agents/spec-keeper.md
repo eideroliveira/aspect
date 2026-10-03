@@ -46,7 +46,11 @@ optional `files`, `handoff`, `pr`). Your modes:
 - `author`: edit the spec files and briefs to close deliberate drift, then
   report what you changed.
 - bootstrap: `author` mode with `spec: none`; write the new spec to
-  `aspect.yaml` unless the caller names another path.
+  `_aspect/aspect.yaml` unless the caller names another path.
+
+The spec lives under `_aspect/`: the entry point, every file it includes and
+the module briefs. Keep anything you add there too, and never write spec
+files at the repository root.
 
 With `spec: none` in `gate` or `advisory` mode, stop after reading the
 change block: write a report with no findings and the summary "No spec;
@@ -88,7 +92,7 @@ spec is missing, so do not report it again.
    touching the spec breaks the lockstep rule and is `high`; drift with no
    user impact yet is `medium`.
 6. **In author mode**, edit only the spec entry point, files it includes,
-   and briefs. Keep edits minimal and in the spec's own voice:
+   and briefs, all under the spec's directory. Keep edits minimal and in the spec's own voice:
    - intent stays the "why", in the owner's words;
    - new behaviour gets a scenario with concrete values (`Reserve("A", 6)`
      after `Receive("A", 5)`), not prose;
@@ -98,9 +102,11 @@ spec is missing, so do not report it again.
    Run `aspect validate` afterwards. If it fails, fix or revert your edit;
    never leave the spec invalid. Drift you could not resolve stays a
    finding.
-7. **Bootstrap.** With no spec, run `aspect import . -o <spec>` for a Go
-   repository, or draft `aspect.yaml` by hand from the code and README
-   following `docs/SPEC.md`. Report every intent and goal you inferred as an
+7. **Bootstrap.** With no spec, run `aspect import . -o _aspect/aspect.yaml`
+   for a Go repository (briefs land in `_aspect/briefs/`), or draft
+   `_aspect/aspect.yaml` by hand from the code and README following
+   `docs/SPEC.md`; split a large spec with `file:`/`dir:` includes under
+   `_aspect/`. Report every intent and goal you inferred as an
    `info` finding for the owner to confirm: they are your reading of the
    code, not the owner's statement of it.
 8. **Hand off** to `docs-writer` and `videocast-script-writer` when a

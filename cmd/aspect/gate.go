@@ -91,8 +91,11 @@ func runGatePlan(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, specErr := git("cat-file", "-e", headSHA+":"+c.Spec)
-	b, err := json.MarshalIndent(gate.BuildPlan(c, baseSHA, headSHA, changes, specErr == nil), "", "  ")
+	spec := c.ResolveSpec(func(path string) bool {
+		_, err := git("cat-file", "-e", headSHA+":"+path)
+		return err == nil
+	})
+	b, err := json.MarshalIndent(gate.BuildPlan(c, baseSHA, headSHA, changes, spec), "", "  ")
 	if err != nil {
 		return err
 	}

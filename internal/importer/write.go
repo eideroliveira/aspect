@@ -41,6 +41,9 @@ func Write(path string, s *spec.Spec, warnings []string, briefs map[string]strin
 		return err
 	}
 	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
 	for rel, content := range briefs {
 		abs := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
