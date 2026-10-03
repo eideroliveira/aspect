@@ -18,7 +18,7 @@ whether the result achieves the spec's stated goals. Go module
 - `internal/pipeline` — orchestration and the report.
 - `internal/gate` — review gates: which agents apply to a diff, report validation, pass/warn/block, PR comment. Pure Go, no model, no git.
 - `cmd/aspect` — CLI: `validate`, `expand`, `plan`, `run`, `drift`, `inventory`, `import`, `gate`.
-- `.claude/agents`, `.claude/review`, `.claude/commands` — the review agents, their shared protocol, report schema and `gates.yaml`, and `/review`. See `docs/design.md`.
+- `.claude/agents`, `.claude/review`, `.claude/commands` — the review agents, their shared protocol, report schema and `gates.yaml`, and the `/review` and `/implement` commands. See `docs/design.md`.
 - `examples/` — reference specs; CI validates them.
 - `docs/` — architecture and spec format.
 
