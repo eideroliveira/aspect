@@ -26,6 +26,9 @@ func Render(c *Config, p *Plan, r *Result, opt RenderOptions) string {
 	b.WriteString(CommentMarker + "\n")
 	fmt.Fprintf(&b, "## Review gates: %s\n\n", headline(r.Outcome))
 	fmt.Fprintf(&b, "`%s...%s`, %d file(s), %d line(s) changed.\n\n", short(p.Base), short(p.Head), p.ChangedFiles, p.ChangedLines)
+	if p.Spec == NoSpec {
+		fmt.Fprintf(&b, "No spec: `%s` does not exist at head, so the agents reviewed against the repository's own rules and docs. The spec keeper can draft one in author mode.\n\n", inline(c.Spec))
+	}
 	if len(r.Agents) == 0 {
 		b.WriteString("No gate applies to this change.\n")
 		return b.String()

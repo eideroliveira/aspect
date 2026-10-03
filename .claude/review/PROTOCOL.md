@@ -12,7 +12,7 @@ CI) starts you with this block:
 ```
 base: <sha>        the merge base with the target branch
 head: <sha>        the revision under review
-spec: <path>       the Aspect spec entry point, usually aspect.yaml
+spec: <path>|none  the Aspect spec entry point, or none when the repository has none
 mode: gate | advisory | author
 out:  .review/<run-id>/<agent>.json
 ```
@@ -26,8 +26,11 @@ PR description).
   are not limited to the changed lines.
 - Read the PR description only **after** you have formed your findings, and
   only to check whether it claims something the code does not do.
-- If `spec` does not exist, say so in an `info` finding and review against
-  the README and docs instead. Without a spec, other agents run advisory.
+- `spec: none` means the orchestrator checked and the repository has no
+  spec. Do not look for one and do not report its absence: the orchestrator
+  states it once in the rendered result. Take intent from the repository's
+  own rules instead (README, `CLAUDE.md`, `AGENTS.md`, docs, and tests that
+  enforce a convention) and leave `spec_ref` empty.
 
 Modes: `gate` and `advisory` produce a report and change nothing; `author`
 (authoring agents only) changes files you own, then reports what changed.
@@ -104,7 +107,34 @@ closed (`additionalProperties: false`), so add no keys of your own.
 | `low` | quality, clarity, maintainability | warns |
 | `info` | observations, questions | never shown as a problem |
 
-Severity describes the consequence if merged, not how hard the fix is.
+Severity describes the consequence if merged, not how hard the fix is, how
+likely the author is to have noticed, or how small the diff is.
+
+**Ladder.** Walk down it and stop at the first line that fits:
+
+| If merged, a user or caller would... | Severity |
+|---|---|
+| lose or corrupt stored data, or let an attacker read, write or act beyond their scope | `critical` |
+| get wrong data returned or shown on a normal path; crash, hang or fail an ordinary request; see a promised behaviour stop working; or the change makes a test fail at head | `high` |
+| hit the failure only with unusual but valid data, timing or configuration; or a cost that grows badly only at a size not yet in production | `medium` |
+| meet no wrong behaviour, but the code is harder to change safely | `low` |
+
+Examples:
+
+- A query that silently drops rows (a `NOT IN` over a column that can hold
+  `NULL`) so a list a user sees is incomplete: `high`, not `medium`. It is
+  wrong data on a normal path.
+- A handler that returns another tenant's record when given its id: `critical`.
+- A loop that issues one query per row on a page that lists 20 items today:
+  `medium`; on a page that lists every customer: `high`.
+- An error that is logged and swallowed where the caller would retry: `medium`
+  if the retry happens on another path, `high` if the user's action is lost.
+
+**Floor.** A finding whose scenario reaches a user, and that you reproduced
+or traced hop by hop with line numbers, is at least `high` with confidence of
+at least 0.8. Rating a proven, user-visible defect `medium` hides it: medium
+only warns. If you cannot reach that bar, say what is unproven and lower the
+confidence, not the severity.
 
 ## 4. Evidence
 

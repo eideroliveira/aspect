@@ -19,8 +19,19 @@ gates:
   - agent: adversarial-reviewer
     paths: ["**/*.go", "**/*.swift", "go.mod", "go.sum"]
     mode: gate
+  # The red team runs only where untrusted input crosses a boundary: for
+  # Aspect, the workspace (writes model output to disk and runs tools), the
+  # model client and prompts, the importer (reads arbitrary repositories),
+  # the CLI, dependencies, CI and the agents themselves. Running it on every
+  # .go file made it the noisiest agent with nothing to find (gosite
+  # evaluation, 2026-10-03). In a web application, list the handlers, auth,
+  # queries, uploads and CI instead, for example:
+  #   paths: ["**/handlers/**", "**/auth/**", "**/*_query.go", "**/migrations/**",
+  #           "**/upload*/**", "go.mod", "go.sum", "**/Dockerfile", ".github/**"]
   - agent: security-red-team
-    paths: ["**/*.go", "**/*.swift", "go.mod", "go.sum", "**/Dockerfile", ".github/**", ".claude/**"]
+    paths: ["cmd/**", "internal/workspace/**", "internal/llm/**", "internal/agents/**",
+            "internal/importer/**", "internal/analyze/**", "go.mod", "go.sum",
+            "**/Dockerfile", ".github/**", ".claude/**"]
     mode: gate
   - agent: architect
     paths: ["aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**", "cmd/**"]
