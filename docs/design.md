@@ -279,6 +279,27 @@ statement; a missing one is a failure.
 A finding's severity describes its consequence if merged, not how hard it is
 to fix.
 
+Agents choose a severity by walking a ladder from the top and stopping at
+the first line that fits. The ladder and its worked examples live in
+`PROTOCOL.md` §3:
+
+- `critical`: stored data lost or corrupted, or an attacker acts beyond
+  their scope.
+- `high`: wrong data returned or shown on a normal path, an ordinary request
+  crashes, hangs or fails, a promised behaviour stops working, or a test fails
+  at head.
+- `medium`: the failure needs unusual but valid data, timing or
+  configuration, or a cost grows badly only at a size production has not
+  reached.
+- `low`: no wrong behaviour, but the code is harder to change safely.
+
+**Floor.** A finding that reaches a user, and that the agent reproduced or
+traced hop by hop, is at least `high` with confidence of at least 0.8. A
+proven, user-visible defect rated `medium` only warns, which hides it. The
+floor exists because the first evaluation on a real repository (section
+3.5) found the right bug in 9 of 19 cases but rated 14 of 16 matching
+findings medium or low, so only 2 would have blocked.
+
 ### 2.7 Handoffs
 
 Subagents do not call each other. When an agent finds work for another, it
@@ -442,6 +463,29 @@ apart:
   confirmation.
 - `aspect gate check` decides when the loop ends, not the author. Nothing is
   pushed; the user opens the PR.
+
+### 3.5 Measuring the gates
+
+`eval/agents/` measures the agents on a repository's own history. A merged
+PR that introduced a bug, which a later PR fixed, becomes a case. Each agent
+reviews the introducing PR in a sandbox that cannot see the fix, and a judge
+scores whether a finding caught the bug and whether it would have blocked.
+Agent files are versioned by hash, so a change to an agent or to
+`PROTOCOL.md` is compared with the previous version on the same cases.
+Change the protocol or an agent's procedure only with such a comparison in
+the PR.
+
+Known gaps, which prompt changes will not close:
+
+- **Visual and layout defects.** CSS, layout and rendered-geometry bugs (a
+  column that wraps to one letter per line, a mark painted over text) are
+  invisible in a diff and in the code around it. Catching them needs a
+  rendering step: screenshots of the affected pages, or the videocast
+  writer's rehearsal, compared before and after. Until then, a gate pass
+  says nothing about how a change looks.
+- **Knowledge outside the repository.** Some defects only show against
+  production data or an external service's behaviour. The agents see
+  neither.
 
 ---
 
