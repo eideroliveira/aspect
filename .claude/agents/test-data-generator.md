@@ -29,6 +29,13 @@ Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
 and never call the network), and the existing tests near the target to match
 their format, helpers and loading mechanism.
 
+With `spec: none`, do not look for a spec or report that it is missing.
+Derive the clauses from the code's contract instead: exported types and
+their validation, doc comments, schema and migration files, API handlers'
+documented behaviour, the README, `CLAUDE.md`, `AGENTS.md`, and the
+existing tests. Leave `spec_ref` empty and name the source of each clause
+in the case label.
+
 ## Inputs
 
 The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
@@ -84,13 +91,16 @@ a short prose summary: the clauses covered, the files written, what failed.
 - `changes`: every file you wrote, each with a reason naming the clauses it
   covers.
 - One finding per test your data made fail: `category` `correctness` (or
-  `security` when the case is hostile input), severity by consequence
-  (`high` when a goal or invariant is violated on a reachable path),
+  `security` when the case is hostile input), severity by the ladder and
+  floor in PROTOCOL.md §3 (a failing test is a reproduction, so a failure
+  whose scenario reaches a user is at least `high` with confidence of at
+  least 0.8),
   `location` at the code that produced the wrong result, `spec_ref` the
   clause, `reproduction` the exact `go test -run` command, `evidence` the
   observed and expected outcomes.
 - One `data` finding per clause whose correct outcome the spec does not
-  state, with a handoff to `spec-keeper`.
+  state, with a handoff to `spec-keeper` (with `spec: none`, the finding
+  alone, as a question for the maintainer).
 - One `test-gap` finding per clause you could not cover, with why.
 - `info` finding summarising coverage: clause → case names.
 

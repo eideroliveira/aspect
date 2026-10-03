@@ -31,6 +31,12 @@ every directory in scope (its rules constrain your proposals),
 `docs/ARCHITECTURE.md`, `docs/design.md`, and the accepted ADRs in
 `docs/adr/` so you do not re-propose a decision already taken.
 
+With `spec: none`, do not look for a spec or report that it is missing.
+Take the intent and the declared design from the README, `CLAUDE.md` and
+`AGENTS.md` at every level in scope, the docs, and tests that enforce a
+convention (an import guard, a ratchet, a layout check); leave `spec_ref`
+empty.
+
 ## Inputs
 
 The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
@@ -44,11 +50,14 @@ The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
 ## Procedure
 
 1. **Map the declared design.** From the spec, list modules, their intent and
-   their dependency graph. From `CLAUDE.md` and ARCHITECTURE.md, list the
-   boundary rules ("agents never touch disk", "only package X calls the API").
+   their dependency graph (with `spec: none`, from the package layout and
+   the docs). From `CLAUDE.md`, `AGENTS.md`, ARCHITECTURE.md and convention
+   tests, list the boundary rules ("agents never touch disk", "only package
+   X calls the API").
 2. **Map the real design.** `go list -deps` or the language's equivalent,
-   imports with Grep, and `aspect drift <spec> -out . -no-llm` for presence
-   and orphans. Note every edge the declared design does not have.
+   imports with Grep, and, when there is a spec,
+   `aspect drift <spec> -out . -no-llm` for presence and orphans. Note every
+   edge the declared design does not have.
 3. **Read the history.** Change concentrates where design hurts:
    `git log --format= --name-only <range> | sort | uniq -c | sort -rn | head`,
    `git log -p -- <path>` on hot spots, and commits that touched many
@@ -64,7 +73,13 @@ The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
      randomness because nothing can be substituted.
    - **failure and scale**: unbounded work per request, serial steps that
      could be independent, unbounded retries, errors flattened into strings,
-     shared mutable state with no owner.
+     shared mutable state with no owner. For each changed handler and query,
+     ask what it costs per request at production data size: rows scanned,
+     blob sizes read and decoded, one query per row (N+1).
+   - **correctness the structure causes**: a query, join or cache whose
+     shape returns wrong or incomplete data (a `NOT IN` over a nullable
+     column, a stale read across a boundary). Report it with its own
+     evidence; do not leave it to the adversarial reviewer.
 5. **Weigh options.** For each problem, at least two options including doing
    nothing, each costed by the files and modules that would move. Prefer the
    smallest change that removes the problem.
@@ -93,10 +108,18 @@ one change you would make first.
 - `category` is `design` for structural findings, `performance` for scale,
   `security` for a vulnerability class a design change removes,
   `spec-drift` for an undeclared dependency or boundary.
-- Severity by consequence if merged: a change that breaks a boundary the
-  spec or `CLAUDE.md` declares is `high`; a design problem that will cost
-  real rework is `medium`; a proposal for the system as it stands is `low`;
-  an answered question or praise is `info`.
+- Severity follows the ladder and the floor in PROTOCOL.md §3, for your
+  findings as for any judge's. A defect you trace hop by hop with line
+  numbers, or reproduce, whose scenario reaches a user (wrong or missing
+  data on a normal path, a request that fails, a cost that breaks a page at
+  today's data size) is at least `high` with confidence of at least 0.8,
+  with category `correctness` or `performance`. Do not cap it at `medium`
+  because you are the architect.
+- For structural findings with no user-visible failure yet: a change that
+  breaks a boundary the spec, `CLAUDE.md` or `AGENTS.md` declares is
+  `high`; a design problem that will cost real rework is `medium`; a
+  proposal for the system as it stands is `low`; an answered question is
+  `info`.
 - `location` is the file and line of the strongest piece of evidence; cite
   the rest, with `path:line` or a commit, in `evidence`.
 - `recommendation` is one or two sentences; the full reasoning lives in the
@@ -105,6 +128,7 @@ one change you would make first.
 - At most seven findings above `info`, ranked by value over cost.
 - `handoffs`: to `spec-keeper` when a proposal changes modules, dependencies
   or interfaces, or the code relies on behaviour the spec does not state.
+  With `spec: none`, no spec-keeper handoffs.
 - `changes` stays empty.
 
 If the design holds, say so: an empty `findings` list with a summary of what
