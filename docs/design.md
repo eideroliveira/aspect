@@ -8,8 +8,10 @@ adversarially, give architectural feedback, attack the system, generate test
 data, write the documentation, and script videocasts of user-facing
 features.
 
-The agents are open source and meant to be dropped into any repository. They
-are used on Aspect itself first.
+The agents are open source and meant to be dropped into any repository. Their
+first real user is gosite, a large Go codebase; they are developed and
+versioned here, in the Aspect repository. A repository with no `aspect.yaml` yet
+starts with the spec keeper's bootstrap (section 4.1).
 
 Sections 1 to 3 are the **conventions** every agent follows. Agents are built
 against them in parallel, so changes to them go through a PR that touches
@@ -243,6 +245,11 @@ Field rules:
   let a finding below 0.5 block, whatever its severity.
 - `changes` lists the files an authoring agent wrote, each with a one-line
   reason. Judges always leave it empty.
+- `adrs` (optional) carries architecture decision records an agent proposes,
+  each `{slug, title, body, finding}` where `finding` is the id of the finding
+  that motivates it. The body has context, decision, consequences and
+  alternatives. When a human accepts one, the orchestrator writes it to
+  `docs/adr/NNNN-<slug>.md`; no agent writes ADR files itself.
 - The agent **does not** state its own verdict. Pass or fail is computed by
   `aspect gate` from the findings and `gates.yaml`, so no agent grades its
   own report.
@@ -533,9 +540,9 @@ existing ADRs.
 
 **Produces.** Findings in `design` and `performance`, ranked by consequence,
 each naming the evidence and the smallest change that would fix it. A
-proposal big enough to need a decision includes ADR text (context,
-decision, consequences, alternatives) in its `recommendation`; the
-orchestrator writes it to `docs/adr/` when a human accepts it.
+proposal big enough to need a decision also goes in the report's `adrs`
+list (2.5), linked to its finding; the orchestrator writes it to
+`docs/adr/` when a human accepts it.
 
 **Runs.** Advisory on PRs that add a module, a dependency, an interface, or
 more than the configured number of changed lines; on request before
