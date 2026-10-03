@@ -65,10 +65,10 @@ The agents inherit the rules that make Aspect's own pipeline trustworthy
     spec-keeper.md
     adversarial-reviewer.md
     architect.md
-    red-team.md
-    test-data.md
-    doc-writer.md
-    videocast-writer.md
+    security-red-team.md
+    test-data-generator.md
+    docs-writer.md
+    videocast-script-writer.md
   review/
     PROTOCOL.md                the shared rules every agent reads first (sections 2.4 to 2.9, condensed)
     report.schema.json         JSON Schema of a gate report (section 2.5)
@@ -81,8 +81,8 @@ internal/gate/                 deterministic aggregator behind `aspect gate`
 cmd/aspect/                    gains the `gate` subcommand
 docs/
   design.md                    this document
-  adr/NNNN-<slug>.md           architecture decision records (architect)
-  guide/                       user documentation (doc writer)
+  adr/NNNN-<slug>.md           architecture decision records (proposed by architect, accepted by a human)
+  guide/                       task-oriented user guides (docs-writer)
   videocasts/<feature>.md      videocast scripts (videocast writer)
 .review/                       per-run reports, gitignored
 ```
@@ -220,7 +220,7 @@ this repository has:
     }
   ],
   "handoffs": [
-    { "to": "test-data", "reason": "Needs boundary values for qty around 1<<31." }
+    { "to": "test-data-generator", "reason": "Needs boundary values for qty around 1<<31." }
   ],
   "changes": []
 }
@@ -277,10 +277,10 @@ The usual handoffs:
 | From | To | When |
 |---|---|---|
 | any judge | spec-keeper | the code does something the spec does not say, or the spec says something no code does |
-| adversarial-reviewer, red-team | test-data | a finding needs inputs that reproduce it |
+| adversarial-reviewer, security-red-team | test-data-generator | a finding needs inputs that reproduce it |
 | architect | spec-keeper | a design decision changes modules, dependencies or interfaces |
-| spec-keeper | doc-writer, videocast-writer | a user-facing surface or scenario changed |
-| red-team | architect | a vulnerability class that a design change, not a patch, removes |
+| spec-keeper | docs-writer, videocast-script-writer | a user-facing surface or scenario changed |
+| security-red-team | architect | a vulnerability class that a design change, not a patch, removes |
 
 ### 2.8 Tools and write ownership
 
@@ -288,11 +288,11 @@ The usual handoffs:
 |---|---|---|---|
 | spec-keeper | author + gate | Read, Grep, Glob, Bash, Edit, Write | the spec files, `briefs/` |
 | adversarial-reviewer | judge | Read, Grep, Glob, Bash | nothing |
-| architect | judge + author of ADRs | Read, Grep, Glob, Bash, Write | `docs/adr/` |
-| red-team | judge | Read, Grep, Glob, Bash | nothing (scratch files only under `.review/`) |
-| test-data | author | Read, Grep, Glob, Bash, Edit, Write | `testdata/` directories, test fixtures and generators named `*_testdata.go` / `fixtures_test.go` |
-| doc-writer | author | Read, Grep, Glob, Bash, Edit, Write | `docs/guide/`, `README.md` |
-| videocast-writer | author | Read, Grep, Glob, Write | `docs/videocasts/` |
+| architect | judge | Read, Grep, Glob, Bash | nothing; an ADR it proposes goes in the report, and the orchestrator writes it to `docs/adr/` when a human accepts it |
+| security-red-team | judge | Read, Grep, Glob, Bash | nothing (scratch files only under `.review/`) |
+| test-data-generator | author | Read, Grep, Glob, Bash, Edit, Write | `testdata/` directories, test fixtures and generators named `*_testdata.go` / `fixtures_test.go` |
+| docs-writer | author | Read, Grep, Glob, Bash, Edit, Write | `README.md` and `docs/`, except `docs/design.md`, `docs/adr/` and `docs/videocasts/` |
+| videocast-script-writer | author | Read, Grep, Glob, Write | `docs/videocasts/` |
 
 Every agent may also write its own report under `.review/`.
 
@@ -329,7 +329,7 @@ gates:
   - agent: adversarial-reviewer
     paths: ["**/*.go", "**/*.swift"]
     mode: gate
-  - agent: red-team
+  - agent: security-red-team
     paths: ["**/*.go", "**/*.swift", "**/Dockerfile", ".github/**"]
     mode: gate
   - agent: architect
@@ -405,10 +405,10 @@ _In progress: each agent's role, inputs, outputs, triggers and handoffs._
 | spec-keeper | keeps the Aspect spec in lockstep with the code, and blocks changes that let them drift |
 | adversarial-reviewer | tries to prove the change wrong against the spec: correctness, edge cases, concurrency, performance |
 | architect | judges structure and evolution, records decisions as ADRs, proposes design improvements |
-| red-team | attacks the change and the system it lives in: threat model, exploitable paths, supply chain |
-| test-data | generates realistic and adversarial test data from entities, contracts and scenarios |
-| doc-writer | writes and updates user and developer documentation from the spec and the code |
-| videocast-writer | scripts short videocasts that show a user-facing feature working |
+| security-red-team | attacks the change and the system it lives in: threat model, exploitable paths, supply chain |
+| test-data-generator | generates realistic and adversarial test data from entities, contracts and scenarios |
+| docs-writer | writes and updates user and developer documentation from the spec and the code |
+| videocast-script-writer | scripts short videocasts that show a user-facing feature working |
 
 ---
 
