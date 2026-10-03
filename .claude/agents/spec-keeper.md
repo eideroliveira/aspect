@@ -47,6 +47,11 @@ optional `files`, `handoff`, `pr`). Your modes:
   report what you changed.
 - bootstrap: `author` mode when the `spec` file does not exist.
 
+When the `spec` file does not exist and you are in `gate` or `advisory`
+mode, report exactly one `info` finding with `location: {"file": "<spec>"}`
+(no line) that recommends a bootstrap run, and no `spec-drift` findings: a
+repository without a spec has nothing to drift from yet.
+
 ## Procedure
 
 1. **Read the change.** `git diff --stat <base>...<head>`, then the diff of

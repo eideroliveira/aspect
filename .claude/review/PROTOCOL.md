@@ -79,7 +79,9 @@ closed (`additionalProperties: false`), so add no keys of your own.
   `design`, `test-gap`, `docs`, `data`. Pick the one that names the harm,
   not your own name.
 - `location` is required above `info`; `line` is 1-based in the **head**
-  version of the file.
+  version of the file. For a finding about a whole file (a file that is
+  missing, a file that should not exist, a file-wide problem), give `file`
+  and omit `line`. A missing file goes at the path where it should be.
 - `spec_ref` names what the spec says about it. Leave it empty only when the
   spec cannot speak to the finding, and then consider a handoff to
   `spec-keeper`.

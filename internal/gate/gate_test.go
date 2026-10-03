@@ -462,3 +462,27 @@ func TestAgentText(t *testing.T) {
 		}
 	}
 }
+
+func TestWholeFileLocation(t *testing.T) {
+	f := finding("spec-keeper/1", "high", 0.9)
+	f.Location = &Location{File: "aspect.yaml"}
+	b := report("spec-keeper", "gate", f)
+	if strings.Contains(string(b), `"line"`) {
+		t.Fatalf("a whole-file location should omit line: %s", b)
+	}
+	if _, err := DecodeReport(b); err != nil {
+		t.Fatalf("whole-file finding rejected: %v", err)
+	}
+	f.Location.EndLine = 4
+	if _, err := DecodeReport(report("spec-keeper", "gate", f)); err == nil {
+		t.Error("end_line without line accepted")
+	}
+
+	c := mustConfig(t)
+	p := plan(c, "README.md")
+	f.Location.EndLine = 0
+	out := Render(c, p, Check(c, p, map[string]Input{"spec-keeper": {Data: report("spec-keeper", "gate", f)}}, false), RenderOptions{})
+	if !strings.Contains(out, "`aspect.yaml`") || strings.Contains(out, "aspect.yaml:0") {
+		t.Errorf("whole-file location rendered wrongly:\n%s", out)
+	}
+}
