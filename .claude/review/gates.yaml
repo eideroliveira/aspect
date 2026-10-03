@@ -1,0 +1,39 @@
+# Which review agents gate which changes, and how their findings become an
+# outcome. Read by `aspect gate plan|check|render` (internal/gate); see
+# docs/design.md section 3.1.
+#
+# paths:  globs over repository-relative paths; "**" matches any number of
+#         directories, so "**/*.go" also matches a .go file at the root.
+# mode:   gate (findings at a block severity fail the check) or advisory
+#         (findings only ever warn).
+# when:   optional narrowing. The gate applies when the changed lines in
+#         matching files reach min_changed_lines, or when any changed file
+#         matches or_touches.
+
+spec: aspect.yaml
+
+gates:
+  - agent: spec-keeper
+    paths: ["**"]                  # every change is checked for lockstep
+    mode: gate
+  - agent: adversarial-reviewer
+    paths: ["**/*.go", "**/*.swift", "go.mod", "go.sum"]
+    mode: gate
+  - agent: security-red-team
+    paths: ["**/*.go", "**/*.swift", "go.mod", "go.sum", "**/Dockerfile", ".github/**", ".claude/**"]
+    mode: gate
+  - agent: architect
+    paths: ["aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**", "cmd/**"]
+    mode: advisory
+    when:
+      min_changed_lines: 200
+      or_touches: ["aspect.yaml", "**/aspect.yaml", "go.mod"]
+
+thresholds:
+  block: [critical, high]
+  warn: [medium, low]
+  min_confidence_to_block: 0.5
+
+# On a public repository, security findings at these severities are shown in
+# the PR comment with title, category and file only.
+public_redaction: [critical, high]
