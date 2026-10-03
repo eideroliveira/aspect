@@ -178,6 +178,11 @@ the first build. Copy `.claude/agents/`, `.claude/review/` and
 | `adversarial-reviewer` | gate | tries to break the change: correctness, edge cases, concurrency, performance |
 | `security-red-team` | gate | attacks the change: every finding has an exploit path |
 
+The agents read the repository's spec from `_aspect/aspect.yaml`, with its
+includes and briefs beside it in `_aspect/` (a root `aspect.yaml` still
+works). A repository without one gets a first draft from `spec-keeper` in
+author mode.
+
 Each agent writes a JSON report (`.claude/review/report.schema.json`);
 `aspect gate` decides the outcome from the reports and
 `.claude/review/gates.yaml`, so no agent grades its own work:

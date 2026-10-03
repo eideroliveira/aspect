@@ -12,7 +12,7 @@ CI) starts you with this block:
 ```
 base: <sha>        the merge base with the target branch
 head: <sha>        the revision under review
-spec: <path>|none  the Aspect spec entry point, or none when the repository has none
+spec: <path>|none  the Aspect spec entry point (usually _aspect/aspect.yaml), or none
 mode: gate | advisory | author
 out:  .review/<run-id>/<agent>.json
 ```

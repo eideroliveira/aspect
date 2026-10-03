@@ -22,7 +22,7 @@ makes a test fail, that is a finding, never a reason to change the data.
 ## Before you start
 
 Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
-`aspect.yaml`, with its includes and briefs). For you the sources are
+`_aspect/aspect.yaml`, with its includes and briefs). For you the sources are
 `database.entities` (fields, types, relations, constraints), each module's
 `operations` with `pre`/`post`, `invariants`, and `scenarios`. Then read
 `CLAUDE.md` for test rules (in this repository: tests run without an API key

@@ -15,6 +15,7 @@ import (
 
 	"github.com/eideroliveira/aspect/internal/analyze"
 	"github.com/eideroliveira/aspect/internal/drift"
+	"github.com/eideroliveira/aspect/internal/gate"
 	"github.com/eideroliveira/aspect/internal/importer"
 	"github.com/eideroliveira/aspect/internal/llm"
 	"github.com/eideroliveira/aspect/internal/pipeline"
@@ -59,7 +60,7 @@ Inventory and import flags:
   -exclude a,b      skip these package directories (external, vendor, testdata are always skipped)
 
 Import flags:
-  -o FILE           where to write the spec (default aspect.yaml)
+  -o FILE           where to write the spec (default _aspect/aspect.yaml; briefs go beside it)
   -language LANG    language of the new system, or of its frontend tier (default: source)
   -topology T       monolith | api_backend | cloud_service
                     monolith:      one tier connecting to its own database (default when
@@ -347,7 +348,7 @@ func runInventory(dir string, args []string) error {
 
 func runImport(dir string, args []string) error {
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	out := fs.String("o", "aspect.yaml", "output spec file")
+	out := fs.String("o", gate.DefaultSpec, "output spec file")
 	include := fs.String("include", "", "package directories to include")
 	exclude := fs.String("exclude", "", "package directories to exclude")
 	language := fs.String("language", "", "target language (default: the source language)")

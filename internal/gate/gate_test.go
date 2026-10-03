@@ -94,7 +94,7 @@ func TestParseConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Spec != "aspect.yaml" || !slices.Equal(c.Thresholds.Block, []string{"critical", "high"}) {
+	if c.Spec != DefaultSpec || !slices.Equal(c.Thresholds.Block, []string{"critical", "high"}) {
 		t.Errorf("defaults not applied: %+v", c)
 	}
 }
@@ -139,12 +139,12 @@ func TestBuildPlan(t *testing.T) {
 		{"nothing", nil, nil},
 	}
 	for _, tc := range cases {
-		p := BuildPlan(c, "b", "h", tc.changes, true)
+		p := BuildPlan(c, "b", "h", tc.changes, c.Spec)
 		if got := agents(p); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: agents = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	p := BuildPlan(c, "b", "h", []Change{{Path: "a.go", Added: 1}, {Path: "README.md", Added: 4, Deleted: 1}}, true)
+	p := BuildPlan(c, "b", "h", []Change{{Path: "a.go", Added: 1}, {Path: "README.md", Added: 4, Deleted: 1}}, c.Spec)
 	if p.ChangedFiles != 2 || p.ChangedLines != 6 {
 		t.Errorf("counts = %d files, %d lines", p.ChangedFiles, p.ChangedLines)
 	}
@@ -232,7 +232,7 @@ func plan(c *Config, files ...string) *Plan {
 	for _, f := range files {
 		ch = append(ch, Change{Path: f, Added: 1})
 	}
-	return BuildPlan(c, "aaaaaaa1", "bbbbbbb2", ch, true)
+	return BuildPlan(c, "aaaaaaa1", "bbbbbbb2", ch, c.Spec)
 }
 
 func TestCheck(t *testing.T) {
@@ -489,7 +489,7 @@ func TestWholeFileLocation(t *testing.T) {
 
 func TestNoSpec(t *testing.T) {
 	c := mustConfig(t)
-	p := BuildPlan(c, "aaaaaaa1", "bbbbbbb2", []Change{{Path: "README.md", Added: 1}}, false)
+	p := BuildPlan(c, "aaaaaaa1", "bbbbbbb2", []Change{{Path: "README.md", Added: 1}}, NoSpec)
 	if p.Spec != NoSpec {
 		t.Fatalf("spec = %q, want %q", p.Spec, NoSpec)
 	}
@@ -497,7 +497,40 @@ func TestNoSpec(t *testing.T) {
 	if strings.Count(out, "No spec:") != 1 || !strings.Contains(out, "`aspect.yaml` does not exist") {
 		t.Errorf("render should state the missing spec once:\n%s", out)
 	}
-	if p := BuildPlan(c, "a", "b", nil, true); p.Spec != "aspect.yaml" {
-		t.Errorf("spec = %q with the spec present", p.Spec)
+}
+
+func TestResolveSpec(t *testing.T) {
+	defaulted, err := ParseConfig([]byte("gates: [{agent: a, paths: ['**'], mode: gate}]"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	explicit := mustConfig(t) // spec: aspect.yaml
+	in := func(paths ...string) func(string) bool {
+		return func(p string) bool { return slices.Contains(paths, p) }
+	}
+	for _, tc := range []struct {
+		name   string
+		c      *Config
+		exists func(string) bool
+		want   string
+	}{
+		{"default present", defaulted, in(DefaultSpec, LegacySpec), DefaultSpec},
+		{"default falls back to the root file", defaulted, in(LegacySpec), LegacySpec},
+		{"default with neither", defaulted, in(), NoSpec},
+		{"explicit present", explicit, in("aspect.yaml"), "aspect.yaml"},
+		{"explicit never falls back", mustParse(t, "spec: specs/app.yaml\ngates: [{agent: a, paths: ['**'], mode: gate}]"), in(LegacySpec), NoSpec},
+	} {
+		if got := tc.c.ResolveSpec(tc.exists); got != tc.want {
+			t.Errorf("%s: ResolveSpec = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func mustParse(t *testing.T, src string) *Config {
+	t.Helper()
+	c, err := ParseConfig([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
