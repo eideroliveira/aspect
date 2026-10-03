@@ -802,9 +802,20 @@ func (a *assembler) tidy(s *spec.Spec) {
 			entities[e.Name] = true
 			local[e.Name] = true
 			for j := range e.Fields {
-				if e.Fields[j].Type == "" {
-					e.Fields[j].Type = "string"
-					a.warn("entity %s field %s had no type; defaulted to string", e.Name, e.Fields[j].Name)
+				f := &e.Fields[j]
+				if f.Type == "" {
+					f.Type = "string"
+					a.warn("entity %s field %s had no type; defaulted to string", e.Name, f.Name)
+				}
+				switch strings.ToLower(strings.TrimSpace(f.Key)) {
+				case "", "primary":
+				case "true", "yes", "pk", "primary_key", "primary key":
+					f.Key = "primary"
+				default:
+					// The format has only single-field primary keys; a
+					// composite or descriptive key cannot be expressed.
+					a.warn("entity %s field %s had key %q; cleared (only \"primary\" is valid)", e.Name, f.Name, f.Key)
+					f.Key = ""
 				}
 			}
 		}
@@ -824,6 +835,14 @@ func (a *assembler) tidy(s *spec.Spec) {
 	providerSurfaces := map[string]string{}
 	for i := range s.System.Interfaces {
 		iface := &s.System.Interfaces[i]
+		// The Synthesizer sometimes describes how an interface is served
+		// ("chi + qor5 presets") where a tier name belongs. In a single-tier
+		// spec the only valid providers are the tier itself ("") and
+		// external; anything else would move every surface to consumes.
+		if len(s.Tiers) == 0 && iface.Provider != "" && iface.Provider != spec.External {
+			a.warn("interface %s had provider %q in a single-tier spec; cleared", iface.Name, iface.Provider)
+			iface.Provider = ""
+		}
 		frameworks := map[string]bool{}
 		if t := s.Tier(iface.Provider); t != nil && iface.Provider != spec.External {
 			if ls := t.LanguageStack(); ls != nil {

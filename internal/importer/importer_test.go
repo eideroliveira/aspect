@@ -53,7 +53,7 @@ func fragments() map[string]agents.Fragment {
 			Intent: "Persist products.",
 			Goals:  []agents.FragmentGoal{{Label: "store-1", Statement: "Products persist", Verify: "test"}},
 			Entities: []spec.Entity{{Name: "Product", Intent: "a sellable item", Fields: []spec.Field{
-				{Name: "ID", Type: "int", Key: "primary"}, {Name: "SKU", Type: "", Unique: true}}, Relations: []spec.Relation{{Kind: "has_many", Entity: "Ghost"}}}},
+				{Name: "ID", Type: "int", Key: "true"}, {Name: "SKU", Type: "", Unique: true, Key: "part of the identity"}}, Relations: []spec.Relation{{Kind: "has_many", Entity: "Ghost"}}}},
 			Operations: []spec.Operation{{Name: "Find", Signature: "Find(sku: string) -> Product | error"}},
 			Scenarios:  []spec.Scenario{{ID: "S1", When: "Find(A)", Then: "returns A"}, {ID: "S1", When: "Find(Z)", Then: "error"}},
 		},
@@ -76,7 +76,7 @@ func TestRunMirrorsPackages(t *testing.T) {
 			{ID: "G2", Statement: "Orphan", Verify: "test", Modules: []string{"nowhere"}},
 		},
 		Stack:      spec.LanguageStack{Frameworks: []spec.Framework{{Name: "chi", Module: "github.com/go-chi/chi/v5"}}, ORM: &spec.Framework{Name: "gorm", Module: "gorm.io/gorm"}},
-		Interfaces: []spec.Interface{{Name: "api", Kind: "http", Intent: "what clients call", Framework: "chi", Auth: "token"}},
+		Interfaces: []spec.Interface{{Name: "api", Kind: "http", Intent: "what clients call", Framework: "chi", Auth: "token", Provider: "chi + qor5 presets"}},
 	}}
 	cache := t.TempDir()
 	res, err := Run(context.Background(), fake, Options{Root: fixture, CacheDir: cache, Repository: "git@example.com:app.git", Commit: "abc123"})
@@ -101,6 +101,12 @@ func TestRunMirrorsPackages(t *testing.T) {
 	}
 	if got := strings.Join(s.Modules[1].Surfaces, ","); got != "api.product,api.reserve" {
 		t.Fatalf("web surfaces = %s", got)
+	}
+	if p := s.System.Interfaces[0].Provider; p != "" {
+		t.Fatalf("a free-text provider in a single-tier spec must be cleared, got %q", p)
+	}
+	if f := s.System.Database.Entities[0].Fields; f[0].Key != "primary" || f[1].Key != "" {
+		t.Fatalf("keys = %q, %q; want a truthy key read as primary and a descriptive one cleared", f[0].Key, f[1].Key)
 	}
 	if len(s.System.Goals) != 1 || strings.Join(s.Modules[0].Goals, ",") != "G1" {
 		t.Fatalf("goals = %+v / %v", s.System.Goals, s.Modules[0].Goals)
