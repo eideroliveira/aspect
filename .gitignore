@@ -23,3 +23,6 @@ coverage.*
 
 # Aspect import cache (fragments per package)
 .aspect-cache/
+
+# Review agent reports (per run)
+/.review/
