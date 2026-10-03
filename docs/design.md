@@ -156,9 +156,14 @@ aspect validate <spec>            # the spec is well formed and closed
 aspect drift <spec> -out . -no-llm  # presence, orphans and tests against the code
 ```
 
-A repository with no spec gets one from the spec keeper before any other
-gate can block: `aspect import` for Go, written by hand from SPEC.md
-otherwise. Until then the other gates run advisory only.
+A repository with no spec keeps its gates blocking. The judges review
+against what the repository does state (the README, the docs, `CLAUDE.md`
+files and the existing tests), note the missing spec once as an `info`
+finding, and block on real findings exactly as they would with a spec. The
+spec keeper, with nothing to drift from, reports no `spec-drift` findings;
+it reports one whole-file `info` finding at the spec path recommending a
+bootstrap (4.1): `aspect import` for Go, written by hand from SPEC.md
+otherwise. The lockstep rule applies from the PR that adds the spec.
 
 **Lockstep rule.** A change that alters behaviour a user or another module
 can observe changes the spec in the same PR. The spec keeper's gate enforces

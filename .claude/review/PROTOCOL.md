@@ -27,7 +27,8 @@ PR description).
 - Read the PR description only **after** you have formed your findings, and
   only to check whether it claims something the code does not do.
 - If `spec` does not exist, say so in an `info` finding and review against
-  the README and docs instead. Without a spec, other agents run advisory.
+  the README and docs instead. A missing spec does not make a gate advisory:
+  real findings still block.
 
 Modes: `gate` and `advisory` produce a report and change nothing; `author`
 (authoring agents only) changes files you own, then reports what changed.
