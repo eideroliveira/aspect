@@ -30,7 +30,8 @@ PR description).
   spec. Do not look for one and do not report its absence: the orchestrator
   states it once in the rendered result. Take intent from the repository's
   own rules instead (README, `CLAUDE.md`, `AGENTS.md`, docs, and tests that
-  enforce a convention) and leave `spec_ref` empty.
+  enforce a convention) and leave `spec_ref` empty. A missing spec does
+  not make a gate advisory: real findings still block.
 
 Modes: `gate` and `advisory` produce a report and change nothing; `author`
 (authoring agents only) changes files you own, then reports what changed.
