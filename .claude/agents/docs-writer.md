@@ -27,6 +27,10 @@ Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
 rules, and the existing documentation: `README.md`, `docs/`, examples,
 `--help` output and package doc comments.
 
+With `spec: none`, do not look for a spec or report that it is missing.
+Take the intent from the README, `CLAUDE.md`, `AGENTS.md`, the existing docs
+and the code's own doc comments, and leave `spec_ref` empty.
+
 ## Inputs
 
 The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
@@ -76,7 +80,8 @@ a short prose summary: what changed for readers and what you verified.
   you checked instead.
 - `correctness` finding for a wrong `--help` string or a misleading flag or
   field name: that is a code change, and you only report it.
-- `handoffs`: to `spec-keeper` when the spec and the code disagree; to
+- `handoffs`: to `spec-keeper` when the spec and the code disagree (not
+  with `spec: none`); to
   `videocast-script-writer` for each user-facing change worth a screencast,
   naming the feature.
 

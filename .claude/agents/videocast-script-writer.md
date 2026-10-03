@@ -28,6 +28,11 @@ serve (the video's promise is a goal in the user's words), and `scenarios`
 (the stories worth showing). Then read the feature's user documentation and
 the existing scripts in `docs/videocasts/`, to keep a series consistent.
 
+With `spec: none`, do not look for a spec or report that it is missing.
+Find the user-facing surfaces and their purpose in the README, `CLAUDE.md`,
+`AGENTS.md`, the user docs and the routes, screens or commands themselves,
+and leave `spec_ref` empty.
+
 ## Inputs
 
 The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
