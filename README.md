@@ -189,8 +189,11 @@ aspect gate render .review/run                               # the PR comment
 ```
 
 `/review` runs the same sequence locally, and
-`.github/workflows/review-gates.yml` runs it on every pull request (it needs
-an `ANTHROPIC_API_KEY` secret). The design is in
+`.github/workflows/review-gates.yml` runs it on every pull request. It needs
+an `ANTHROPIC_API_KEY` secret (agents run in Claude Code) or a
+`GEMINI_API_KEY` secret (agents run in Gemini CLI, limited by
+`.claude/review/gemini-policy.toml`); with both, set the repository variable
+`REVIEW_GATES_PROVIDER=gemini` to prefer Gemini. The design is in
 [docs/design.md](docs/design.md).
 
 ## Status

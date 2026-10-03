@@ -1,15 +1,19 @@
 # Runs the review agents on every pull request and turns their reports into
 # one check and one sticky comment. See docs/design.md section 3.3.
 #
-# Needs the ANTHROPIC_API_KEY repository secret. It does not run on pull
-# requests from forks (secrets are not exposed to them) or on drafts; a
-# maintainer runs /review locally instead.
+# Needs one repository secret: ANTHROPIC_API_KEY (agents run in Claude Code)
+# or GEMINI_API_KEY (agents run in Gemini CLI, restricted by
+# .claude/review/gemini-policy.toml). With both set, Anthropic is used unless
+# the repository variable REVIEW_GATES_PROVIDER is "gemini". It does not run
+# on pull requests from forks (secrets are not exposed to them) or on drafts;
+# a maintainer runs /review locally instead.
 #
 # The review job runs Claude Code over code the PR author controls, with the
 # API key in its environment. That is acceptable only because forks are
 # excluded: everyone who can open a same-repository PR can already push
 # code that CI executes. The job gets no GitHub token and a read-only
-# checkout, and the agents' Bash is limited to the commands below.
+# checkout, and the agents' shell is limited to the commands below (Claude)
+# or in the policy file (Gemini).
 name: Review gates
 
 on:
@@ -49,7 +53,24 @@ jobs:
       agents: ${{ steps.plan.outputs.agents }}
       run_id: ${{ steps.plan.outputs.run_id }}
       override: ${{ steps.plan.outputs.override }}
+      provider: ${{ steps.provider.outputs.provider }}
     steps:
+      - name: Pick the model provider
+        id: provider
+        env:
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
+          PREFER: ${{ vars.REVIEW_GATES_PROVIDER }}
+        run: |
+          if [ "$PREFER" = gemini ] && [ "$HAS_GEMINI" = true ]; then provider=gemini
+          elif [ "$HAS_ANTHROPIC" = true ]; then provider=anthropic
+          elif [ "$HAS_GEMINI" = true ]; then provider=gemini
+          else
+            echo "::error::Review gates need an ANTHROPIC_API_KEY or GEMINI_API_KEY repository secret."
+            exit 1
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "Running the review agents with $provider."
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -84,6 +105,7 @@ jobs:
           retention-days: 7
 
   review:
+    name: review (${{ matrix.agent }})
     needs: plan
     if: needs.plan.outputs.agents != '[]'
     runs-on: ubuntu-latest
@@ -105,16 +127,25 @@ jobs:
         with:
           node-version: 22
       - name: Install tools
+        env:
+          PROVIDER: ${{ needs.plan.outputs.provider }}
         run: |
           go build -o aspect ./cmd/aspect
-          npm install -g @anthropic-ai/claude-code
+          if [ "$PROVIDER" = gemini ]; then
+            npm install -g @google/gemini-cli
+          else
+            npm install -g @anthropic-ai/claude-code
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: review-plan
           path: .review/${{ needs.plan.outputs.run_id }}
       - name: Run ${{ matrix.agent }}
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROVIDER: ${{ needs.plan.outputs.provider }}
+          ANTHROPIC_API_KEY: ${{ needs.plan.outputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ needs.plan.outputs.provider == 'gemini' && secrets.GEMINI_API_KEY || '' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           RUN_ID: ${{ needs.plan.outputs.run_id }}
           AGENT: ${{ matrix.agent }}
           MODE: ${{ matrix.mode }}
@@ -122,16 +153,33 @@ jobs:
         run: |
           dir=".review/$RUN_ID"
           out="$dir/$AGENT.json"
+          transcript="$dir/$AGENT.transcript.json"
           block=$(jq -r --arg mode "$MODE" --arg out "$out" --arg files "$FILES" \
             '"base: \(.base)\nhead: \(.head)\nspec: \(.spec)\nmode: \($mode)\nout:  \($out)\nfiles: \($files)"' "$dir/plan.json")
           # A failed or empty run leaves no report; the final job then blocks.
-          claude -p "$block" \
-            --agent "$AGENT" \
-            --permission-mode dontAsk \
-            --allowedTools "${ALLOWED_TOOLS//, /,}" \
-            --output-format json \
-            > "$dir/$AGENT.transcript.json" || echo "::warning::$AGENT exited with $?"
-          ./aspect gate extract -o "$out" "$dir/$AGENT.transcript.json" || echo "::warning::$AGENT printed no report"
+          if [ "$PROVIDER" = gemini ]; then
+            # Gemini CLI has no Claude Code subagents: the agent's file, minus
+            # its frontmatter, becomes the prompt, and the policy file stands
+            # in for the agent's tools list.
+            prompt=$(printf 'You are the %s review agent. Follow these instructions exactly.\n\n%s\n\n---\n\n%s\n' \
+              "$AGENT" "$(awk 'f>=2 {print; next} /^---$/ {f++}' ".claude/agents/$AGENT.md")" "$block")
+            model=()
+            [ -n "$GEMINI_MODEL" ] && model=(--model "$GEMINI_MODEL")
+            gemini -p "$prompt" "${model[@]}" \
+              --skip-trust \
+              --approval-mode default \
+              --policy .claude/review/gemini-policy.toml \
+              --output-format json \
+              > "$transcript" || echo "::warning::$AGENT exited with $?"
+          else
+            claude -p "$block" \
+              --agent "$AGENT" \
+              --permission-mode dontAsk \
+              --allowedTools "${ALLOWED_TOOLS//, /,}" \
+              --output-format json \
+              > "$transcript" || echo "::warning::$AGENT exited with $?"
+          fi
+          ./aspect gate extract -o "$out" "$transcript" || echo "::warning::$AGENT printed no report"
           rm -rf .review/scratch
       - uses: actions/upload-artifact@v4
         if: always()

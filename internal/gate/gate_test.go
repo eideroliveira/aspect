@@ -448,3 +448,17 @@ func TestLastJSONBlock(t *testing.T) {
 		t.Errorf("unterminated trailing block: got %q, %v", b, err)
 	}
 }
+
+func TestAgentText(t *testing.T) {
+	cases := map[string]string{
+		`{"type":"result","result":"claude text"}`:         "claude text",
+		`{"session_id":"x","response":"gemini text"}`:      "gemini text",
+		"plain ```json\n{}\n```":                           "plain ```json\n{}\n```",
+		`{"session_id":"x","error":{"message":"bad key"}}`: `{"session_id":"x","error":{"message":"bad key"}}`,
+	}
+	for in, want := range cases {
+		if got := AgentText([]byte(in)); got != want {
+			t.Errorf("AgentText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

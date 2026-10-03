@@ -31,8 +31,8 @@ func runGate(sub string, args []string) error {
 }
 
 // runGateExtract saves the report an agent printed as the last fenced json
-// block of its final message. Input is Claude Code's --output-format json
-// result, or plain text.
+// block of its final message. Input is the --output-format json result of
+// Claude Code or Gemini CLI, or plain text.
 func runGateExtract(args []string) error {
 	fs := flag.NewFlagSet("gate extract", flag.ContinueOnError)
 	out := fs.String("o", "", "where to write the report (required)")
@@ -55,13 +55,7 @@ func runGateExtract(args []string) error {
 	if err != nil {
 		return err
 	}
-	text := string(raw)
-	var wrapped struct {
-		Result *string `json:"result"`
-	}
-	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Result != nil {
-		text = *wrapped.Result
-	}
+	text := gate.AgentText(raw)
 	b, err := gate.LastJSONBlock(text)
 	if err != nil {
 		return err

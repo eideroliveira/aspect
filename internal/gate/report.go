@@ -250,3 +250,22 @@ func LastJSONBlock(text string) ([]byte, error) {
 	}
 	return []byte(strings.Join(last, "\n") + "\n"), nil
 }
+
+// AgentText returns the final message from a headless agent run: the
+// "result" field of Claude Code's --output-format json, the "response" field
+// of Gemini CLI's, or the input itself when it is plain text.
+func AgentText(raw []byte) string {
+	var wrapped struct {
+		Result   *string `json:"result"`
+		Response *string `json:"response"`
+	}
+	if json.Unmarshal(raw, &wrapped) == nil {
+		switch {
+		case wrapped.Result != nil:
+			return *wrapped.Result
+		case wrapped.Response != nil:
+			return *wrapped.Response
+		}
+	}
+	return string(raw)
+}
