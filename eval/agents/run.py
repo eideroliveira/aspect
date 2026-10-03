@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Run review agents against mined cases and keep their reports.
+
+For each case the agent reviews the introducing PR (review.base..review.head)
+inside a sandbox repository that holds only history reachable from the PR
+head, so the later fix cannot be seen with git. The session loads no user
+settings, hooks or MCP servers, so no memory of the fix leaks in either.
+
+Usage:
+  run.py --cases cases/gosite.jsonl --agent adversarial-reviewer [--case ID ...]
+         [--repo ~/PL/website/gosite] [--agents-src .claude] [--model opus]
+"""
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+ROOT = HERE.parent.parent  # the aspect checkout
+UPLOAD_PACK = "git -c uploadpack.allowAnySHA1InWant=true upload-pack"
+HISTORY_DEPTH = 300
+
+
+def sh(*cmd, cwd=None, check=True, **kw):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, **kw)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"{' '.join(map(str, cmd))}: {r.stderr.strip()[-2000:]}")
+    return r
+
+
+def sandbox(repo, case, workdir, agents_src):
+    """A fresh repository at the PR head with no refs or objects past it."""
+    rv = case["review"]
+    box = workdir / case["id"]
+    if box.exists():
+        shutil.rmtree(box)
+    box.mkdir(parents=True)
+    sh("git", "init", "-q", cwd=box)
+    sh("git", "fetch", "-q", f"--depth={HISTORY_DEPTH}", f"--upload-pack={UPLOAD_PACK}",
+       str(repo), rv["head"], rv["base"], cwd=box)
+    sh("git", "checkout", "-q", "--detach", rv["head"], cwd=box)
+    sh("git", "tag", "review-base", rv["base"], cwd=box)
+    # The project's own agents, hooks and settings are not under test.
+    claude = box / ".claude"
+    for p in ("agents", "hooks", "settings.json", "settings.local.json", "commands", "skills", "worktrees"):
+        t = claude / p
+        if t.is_dir():
+            shutil.rmtree(t)
+        elif t.exists():
+            t.unlink()
+    for p in ("agents", "review", "commands"):
+        s = agents_src / p
+        if s.is_dir():
+            shutil.copytree(s, claude / p, dirs_exist_ok=True)
+    # Keep the sandbox's own status clean so agents see only the PR.
+    with open(box / ".git" / "info" / "exclude", "a") as f:
+        f.write("\n.claude/agents/\n.claude/review/\n.claude/commands/\n.review/\n")
+    return box
+
+
+def change_block(case, agent, mode):
+    rv = case["review"]
+    return "\n".join([
+        f"base: {rv['base']}",
+        f"head: {rv['head']}",
+        "spec: aspect.yaml",
+        f"mode: {mode}",
+        f"out:  .review/eval/{agent}.json",
+    ])
+
+
+def last_json_block(text):
+    blocks = re.findall(r"```json\s*\n(.*?)\n```", text or "", re.S)
+    for b in reversed(blocks):
+        try:
+            return json.loads(b)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def run_agent(box, case, agent, a):
+    prompt = (f"Review this change.\n\n{change_block(case, agent, a.mode)}\n\n"
+              f"PR title: {case['review']['subject']}\n")
+    cmd = ["claude", "-p", prompt, "--agent", agent,
+           "--output-format", "json",
+           "--setting-sources", "project",
+           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+           "--no-session-persistence",
+           "--permission-mode", "dontAsk",
+           "--allowedTools", *a.allowed_tools.split(","),
+           "--max-budget-usd", str(a.budget)]
+    if a.model:
+        cmd += ["--model", a.model]
+    started = datetime.datetime.now(datetime.timezone.utc)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OMEGA")}
+    r = sh(*cmd, cwd=box, check=False, env=env, timeout=a.timeout)
+    secs = (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds()
+    try:
+        meta = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        meta = {"result": r.stdout, "is_error": True}
+    report_path = box / ".review" / "eval" / f"{agent}.json"
+    report, source = None, None
+    if report_path.exists():
+        try:
+            report, source = json.loads(report_path.read_text()), "file"
+        except json.JSONDecodeError:
+            pass
+    if report is None:
+        report = last_json_block(meta.get("result"))
+        source = "message" if report else None
+    return {
+        "case": case["id"], "agent": agent, "mode": a.mode, "model": a.model or "default",
+        "started": started.isoformat(), "seconds": round(secs),
+        "exit": r.returncode, "stderr": r.stderr[-2000:],
+        "cost_usd": meta.get("total_cost_usd"), "turns": meta.get("num_turns"),
+        "is_error": meta.get("is_error"),
+        "report_source": source, "report": report,
+        "final_message": (meta.get("result") or "")[-6000:],
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cases", required=True)
+    ap.add_argument("--agent", action="append", required=True)
+    ap.add_argument("--case", action="append", help="case ids (default: all)")
+    ap.add_argument("--repo", default=os.path.expanduser("~/PL/website/gosite"))
+    ap.add_argument("--agents-src", default=str(ROOT / ".claude"))
+    ap.add_argument("--workdir", default=os.environ.get("ASPECT_EVAL_WORK", "/tmp/aspect-eval"))
+    ap.add_argument("--results", default=str(HERE / "results" / "runs.jsonl"))
+    ap.add_argument("--mode", default="advisory")
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--budget", type=float, default=5.0)
+    ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--allowed-tools", default="Read,Grep,Glob,Bash,Write(.review/**)")
+    a = ap.parse_args()
+
+    cases = [json.loads(l) for l in open(a.cases) if l.strip()]
+    if a.case:
+        cases = [c for c in cases if c["id"] in a.case]
+    out = pathlib.Path(a.results)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for c in cases:
+        box = sandbox(pathlib.Path(a.repo), c, pathlib.Path(a.workdir), pathlib.Path(a.agents_src))
+        for agent in a.agent:
+            print(f"run {c['id']} {agent} ...", file=sys.stderr, flush=True)
+            rec = run_agent(box, c, agent, a)
+            with open(out, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            n = len((rec["report"] or {}).get("findings", []))
+            print(f"  {rec['seconds']}s ${rec['cost_usd']} report={rec['report_source']} findings={n}",
+                  file=sys.stderr, flush=True)
+
+
+if __name__ == "__main__":
+    main()
