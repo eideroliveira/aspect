@@ -44,10 +44,11 @@ type Finding struct {
 	Confidence     float64   `json:"confidence"`
 }
 
-// Location is a file and 1-based line range in the head version.
+// Location is a file and 1-based line range in the head version. Line is
+// omitted for a finding about a whole file, such as one that is missing.
 type Location struct {
 	File    string `json:"file"`
-	Line    int    `json:"line"`
+	Line    int    `json:"line,omitempty"`
 	EndLine int    `json:"end_line,omitempty"`
 }
 
@@ -108,6 +109,14 @@ func requireKeys(b []byte) error {
 		return fmt.Errorf("findings: %w", err)
 	}
 	for i, f := range findings {
+		if raw, ok := f["location"]; ok {
+			var loc map[string]json.RawMessage
+			if json.Unmarshal(raw, &loc) == nil {
+				if line, ok := loc["line"]; ok && string(line) == "0" {
+					return fmt.Errorf("findings[%d]: location line is 1-based; omit it for a whole-file finding", i)
+				}
+			}
+		}
 		if err := hasKeys(fmt.Sprintf("findings[%d]", i), f, "id", "severity", "category", "title", "evidence", "recommendation", "confidence"); err != nil {
 			return err
 		}
@@ -174,8 +183,11 @@ func (r *Report) Validate() error {
 			bad("%s: a %s finding needs a location", at, f.Severity)
 		}
 		if l := f.Location; l != nil {
-			if l.File == "" || l.Line < 1 {
-				bad("%s: location needs a file and a 1-based line", at)
+			if l.File == "" || l.Line < 0 {
+				bad("%s: location needs a file, and a line only if it is 1-based", at)
+			}
+			if l.EndLine != 0 && l.Line == 0 {
+				bad("%s: end_line needs a line", at)
 			}
 			if l.EndLine != 0 && l.EndLine < l.Line {
 				bad("%s: end_line %d is before line %d", at, l.EndLine, l.Line)

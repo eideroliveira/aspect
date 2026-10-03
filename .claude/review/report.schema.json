@@ -157,8 +157,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "file",
-        "line"
+        "file"
       ],
       "properties": {
         "file": {
@@ -168,12 +167,19 @@
         },
         "line": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "1-based line in the head version. Omit it for a finding about a whole file, such as a missing one."
         },
         "end_line": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Requires line."
         }
+      },
+      "dependentRequired": {
+        "end_line": [
+          "line"
+        ]
       }
     },
     "handoff": {

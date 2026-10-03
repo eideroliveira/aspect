@@ -75,7 +75,10 @@ func Render(c *Config, p *Plan, r *Result, opt RenderOptions) string {
 func renderFinding(b *strings.Builder, c *Config, f Finding, opt RenderOptions) {
 	loc := ""
 	if l := f.Location; l != nil {
-		loc = fmt.Sprintf(" `%s:%d`", inline(l.File), l.Line)
+		loc = fmt.Sprintf(" `%s`", inline(l.File))
+		if l.Line > 0 {
+			loc = fmt.Sprintf(" `%s:%d`", inline(l.File), l.Line)
+		}
 	}
 	fmt.Fprintf(b, "- **%s** %s · %s%s: %s", f.Severity, inline(f.ID), f.Category, loc, inline(f.Title))
 	if opt.Public && f.Category == "security" && slices.Contains(c.PublicRedaction, f.Severity) {
