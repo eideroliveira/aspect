@@ -15,6 +15,9 @@ implementation honours the intent.
 - [Architecture](ARCHITECTURE.html): why the agents are separated, how a
   run flows, tiers, language profiles, and how an existing system is
   imported.
+- [Review agents](design.html): the subagents that keep the spec true,
+  review and attack every change, and write docs, test data and videocast
+  scripts; their shared conventions and how review gates run.
 
 ## Where to start
 

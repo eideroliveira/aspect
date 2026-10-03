@@ -292,7 +292,7 @@ The usual handoffs:
 | security-red-team | judge | Read, Grep, Glob, Bash | nothing (scratch files only under `.review/`) |
 | test-data-generator | author | Read, Grep, Glob, Bash, Edit, Write | `testdata/` directories, test fixtures and generators named `*_testdata.go` / `fixtures_test.go` |
 | docs-writer | author | Read, Grep, Glob, Bash, Edit, Write | `README.md` and `docs/`, except `docs/design.md`, `docs/adr/` and `docs/videocasts/` |
-| videocast-script-writer | author | Read, Grep, Glob, Write | `docs/videocasts/` |
+| videocast-script-writer | author | Read, Grep, Glob, Bash, Edit, Write | `docs/videocasts/` |
 
 Every agent may also write its own report under `.review/`.
 
@@ -398,20 +398,247 @@ Rules:
 
 ## 4. The agents
 
-_In progress: each agent's role, inputs, outputs, triggers and handoffs._
+| Agent | Kind | One line |
+|---|---|---|
+| [spec-keeper](#41-spec-keeper) | author + gate | keeps the Aspect spec in lockstep with the code, and blocks changes that let them drift |
+| [adversarial-reviewer](#42-adversarial-reviewer) | gate | tries to prove the change wrong against the spec: correctness, edge cases, concurrency, performance |
+| [security-red-team](#43-security-red-team) | gate | attacks the change and the system around it, with an exploit path for every finding |
+| [architect](#44-architect) | advisory | judges how the system is cut and how it should evolve; proposes ADRs |
+| [test-data-generator](#45-test-data-generator) | author | deterministic, synthetic test data from entities, contracts and scenarios |
+| [docs-writer](#46-docs-writer) | author | user and developer documentation, every example verified by running it |
+| [videocast-script-writer](#47-videocast-script-writer) | author | recording-ready scripts that show a user-facing feature working |
 
-| Agent | One line |
-|---|---|
-| spec-keeper | keeps the Aspect spec in lockstep with the code, and blocks changes that let them drift |
-| adversarial-reviewer | tries to prove the change wrong against the spec: correctness, edge cases, concurrency, performance |
-| architect | judges structure and evolution, records decisions as ADRs, proposes design improvements |
-| security-red-team | attacks the change and the system it lives in: threat model, exploitable paths, supply chain |
-| test-data-generator | generates realistic and adversarial test data from entities, contracts and scenarios |
-| docs-writer | writes and updates user and developer documentation from the spec and the code |
-| videocast-script-writer | scripts short videocasts that show a user-facing feature working |
+Together they cover the roles of a product team's senior engineers: the
+spec keeper is the product's memory, the reviewer and the red team are the
+two people who try to break everything, the architect is the one who asks
+whether the system will still make sense in a year, and the three authors do
+the work that is always postponed and always needed.
+
+Each section below gives the agent's role, what it reads, what it produces,
+when it runs, whom it hands off to, and what it must never do. The agent's
+file in `.claude/agents/` is the executable form of its section; when the
+two disagree, fix one of them in the same PR.
+
+### 4.1 spec-keeper
+
+**Role.** The spec is the only description of the product every other agent
+trusts, so it must stay true. The spec keeper finds where code and spec
+disagree and, in author mode, writes the spec edits that close the gap. It
+decides which side is wrong: when the code does something the spec never
+promised and the change looks deliberate, the spec catches up; when the code
+breaks a promise the spec still makes, that is a defect and it reports it.
+
+**Reads.** The change block (2.4); the whole spec with includes and briefs;
+`aspect validate` and `aspect drift -no-llm` output; the code and tests the
+diff touches, and enough around them to tell intended behaviour from
+accident.
+
+**Produces.**
+
+- *gate:* findings with category `spec-drift`: behaviour added with no spec
+  coverage, spec promises with no code, a scenario whose test was removed, an
+  entity or surface moved between modules without the spec moving. A change
+  that breaks the lockstep rule (2.3) is `high`.
+- *author:* edits to the spec files and briefs, kept minimal and in the
+  spec's existing style, with `aspect validate` clean afterwards. Every edit
+  is listed in `changes` with the code that justifies it. It never deletes a
+  goal: a goal the code no longer serves becomes a finding for a human,
+  because dropping a goal is a product decision.
+- *bootstrap:* in a repository without a spec, runs `aspect import` (Go) or
+  drafts `aspect.yaml` from the code and README, and reports every intent and
+  goal it inferred as `info` findings for the owner to confirm.
+
+**Runs.** As a gate on every PR. In author mode on request, or as a
+follow-up when its own gate failed.
+
+**Hands off to** docs-writer and videocast-script-writer when a user-facing
+surface or scenario changed; test-data-generator when it adds scenarios or
+entities.
+
+**Must not** edit code or tests, invent goals, weaken an invariant to make
+code comply, or mark a spec gap resolved because the code "obviously"
+intends it.
+
+### 4.2 adversarial-reviewer
+
+**Role.** It did not write the change and does not want it merged until it
+has failed to break it. It hunts for defects that reach users: wrong
+results, crashes, lost or corrupted data, hangs, broken contracts,
+regressions, and performance that violates a stated goal or turns a hot
+path quadratic. Style and taste are out of scope.
+
+**Reads.** The change block; the spec (operations with `pre`/`post`,
+invariants, scenarios, goals the touched modules own); the changed code and
+its callers; the tests, to see what they do not cover.
+
+**Produces.** Findings in `correctness`, `performance` and `test-gap`, each
+with a concrete failure scenario: the input or interleaving, what happens,
+what the spec says should happen. Where it can, it proves the finding with a
+throwaway test it runs and puts in `reproduction`. A review with no findings
+lists the attacks it tried in `summary`.
+
+**Runs.** As a gate on every PR that touches code.
+
+**Hands off to** test-data-generator for inputs that pin a finding down;
+spec-keeper when the spec is silent on the behaviour in question.
+
+**Must not** edit any file outside `.review/`, report a finding it could not
+tie to a line, or read the PR description before forming its findings
+(2.4).
+
+### 4.3 security-red-team
+
+**Role.** Attacks the change the way an adversary would. It threat-models
+the attack surface the change adds or alters, then looks for exploitable
+paths: injection, authorization bypass, secret exposure, path traversal,
+SSRF, unsafe deserialisation, resource exhaustion, supply chain (new
+dependencies, CI changes), and prompt injection into any feature that feeds
+untrusted text to a model. For Aspect itself, the generated-code workspace
+and the agents' own inputs are the first targets.
+
+**Reads.** The change block; the spec's `interfaces` (every surface is attack
+surface), `database.entities` (what is worth stealing), `constraints`; the
+changed code, its entry points and trust boundaries; dependency manifests
+and `.github/`.
+
+**Produces.** Findings in `security`, each with an exploit path from an
+entry point an attacker controls to the harm, and a fix. A proof of concept
+runs only against local throwaway code under `.review/`, never against a
+running service or the network. On public repositories, high and critical
+findings are redacted in CI (3.3).
+
+**Runs.** As a gate on every PR touching code, dependencies, containers or
+CI. On request, a full-system pass before a release.
+
+**Hands off to** architect when a class of vulnerability needs a design
+change rather than a patch; test-data-generator for malicious inputs that
+should become permanent regression fixtures.
+
+**Must not** run exploits against anything but local scratch code, exfiltrate
+or print real secrets it finds (it reports the location only), or edit any
+file outside `.review/`.
+
+### 4.4 architect
+
+**Role.** Judges the design, not the diff: whether the way the system is cut
+still serves the intent the spec states, and what should change so it keeps
+serving it as the product grows. It weighs coupling, module boundaries,
+dependency direction, data ownership, performance at the scale the goals
+imply, and the cost of the next likely change. It proposes; humans decide.
+
+**Reads.** The spec as a whole (`aspect expand` to see it assembled), the
+plan (`aspect plan`), project rules in `CLAUDE.md` files, the code, and its
+history (`git log`, churn, files that are repaired over and over), plus
+existing ADRs.
+
+**Produces.** Findings in `design` and `performance`, ranked by consequence,
+each naming the evidence and the smallest change that would fix it. A
+proposal big enough to need a decision includes ADR text (context,
+decision, consequences, alternatives) in its `recommendation`; the
+orchestrator writes it to `docs/adr/` when a human accepts it.
+
+**Runs.** Advisory on PRs that add a module, a dependency, an interface, or
+more than the configured number of changed lines; on request before
+starting a feature that crosses modules; periodically (for example per
+release) over the whole system.
+
+**Hands off to** spec-keeper when an accepted decision changes modules,
+dependencies or interfaces.
+
+**Must not** edit code, the spec or ADRs, or block a merge: its findings
+inform design, they do not gate it. A finding the team should not ignore is
+raised as a spec change or an ADR, through humans.
+
+### 4.5 test-data-generator
+
+**Role.** Writes deterministic, synthetic data that exercises what the spec
+says: valid entities, boundary values from `pre` conditions, sequences that
+stress invariants, and the hostile inputs the reviewer and red team found.
+It also builds the demo dataset videocasts are recorded with.
+
+**Reads.** The spec's entities with fields and relations, operations with
+`pre`/`post`, invariants and scenarios; existing tests and fixtures, to
+extend rather than duplicate; findings handed off to it.
+
+**Produces.** Fixtures, seed files, table-driven cases and small generators
+in the language's test data locations (`testdata/` and test-only files),
+seeded so every run produces the same data. Every datum is synthetic: no
+real names, emails, addresses or values copied from production. Each set
+says in a header comment which spec element it covers.
+
+**Runs.** On request; after a module gains an entity or operation; as a
+handoff from a judge.
+
+**Hands off to** adversarial-reviewer when the data it wrote makes an
+existing test fail (that is a finding, not a data problem).
+
+**Must not** edit production code or assertions in existing tests, use real
+personal data, or make tests pass by choosing data that avoids a bug.
+
+### 4.6 docs-writer
+
+**Role.** Keeps documentation true. A reader who follows the docs exactly
+must get the result the docs promise. Accuracy beats coverage.
+
+**Reads.** `CLAUDE.md` for writing rules; the change; the spec (intents and
+scenarios explain *why*, surfaces explain *what*); the code for exact flags,
+defaults and error messages; the existing docs, to update before adding.
+
+**Produces.** Edits to `README.md` and `docs/` (outside the paths other
+agents own), with every command and example run before it is written. Its
+report lists the files changed and any docs it found wrong but could not fix,
+as `docs` findings.
+
+**Runs.** On request; as a handoff from spec-keeper; before a release.
+
+**Hands off to** videocast-script-writer when a feature is better shown
+than told; spec-keeper when the docs and the spec disagree and it cannot
+tell which is right.
+
+**Must not** document behaviour it did not observe, edit code or the spec,
+or keep an example it could not run (it removes or flags it).
+
+### 4.7 videocast-script-writer
+
+**Role.** Writes scripts for short screencasts that show one user-facing
+feature doing what its scenario says, from a user's point of view. A script
+is recording-ready: someone with no context can record it without asking a
+question.
+
+**Reads.** The spec's user-facing surfaces (`web`, `app`, `cli`) and the
+scenarios that exercise them, which become the storyline; the docs for the
+feature; the running product, to verify each on-screen step.
+
+**Produces.** `docs/videocasts/<feature>.md`: audience and goal, the scenario
+it demonstrates, prerequisites and demo data (from test-data-generator),
+then scenes, each with on-screen actions, exact inputs, expected result and
+narration, and a target length. Every action is verified by running it.
+
+**Runs.** On request; when a user-facing feature ships or changes; as a
+handoff from spec-keeper or docs-writer.
+
+**Hands off to** test-data-generator for the demo dataset.
+
+**Must not** script a step it could not perform, use real customer data on
+screen, or describe a feature the spec does not state.
 
 ---
 
 ## 5. Build plan
 
-_In progress._
+| Piece | Owner |
+|---|---|
+| This document, sections 1 to 4 | Agent roster and architecture thread |
+| spec-keeper, adversarial-reviewer, security-red-team; `.claude/review/PROTOCOL.md` and `report.schema.json`; `internal/gate` and `aspect gate`; `review-gates.yml`; `/review` | Core review gate agents thread |
+| architect, test-data-generator, docs-writer, videocast-script-writer | Product support agents thread |
+| Running the whole set on a real project, measuring what it catches, tuning prompts and thresholds | Dogfood and harden thread |
+
+Order: `report.schema.json` and `PROTOCOL.md` first, since every agent's
+output section depends on them; then `aspect gate`, because without it a
+gate cannot fail; then the workflow. Agent files can land in any order once
+the schema exists.
+
+Done means: `aspect gate` is covered by offline tests like the rest of the
+repository, every agent's output validates against the schema, the gates run
+on this repository's own PRs, and the dogfood thread reports at least one
+real defect each gate agent caught that the existing CI did not.
