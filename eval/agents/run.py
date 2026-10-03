@@ -179,6 +179,8 @@ def main():
     ap.add_argument("--model", default=None)
     ap.add_argument("--budget", type=float, default=5.0)
     ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--resume", action="store_true",
+                    help="skip case/agent pairs already in results at the same agent version")
     ap.add_argument("--allowed-tools", default="Read,Grep,Glob,Bash,Write(.review/**)")
     a = ap.parse_args()
 
@@ -187,9 +189,16 @@ def main():
         cases = [c for c in cases if c["id"] in a.case]
     out = pathlib.Path(a.results)
     out.parent.mkdir(parents=True, exist_ok=True)
+    done = set()
+    if a.resume and out.exists():
+        done = {(r["case"], r["agent"], r.get("agent_version")) for r in map(json.loads, open(out))}
     for c in cases:
+        todo = [g for g in a.agent
+                if (c["id"], g, agent_version(pathlib.Path(a.agents_src), g)) not in done]
+        if not todo:
+            continue
         box = sandbox(pathlib.Path(a.repo), c, pathlib.Path(a.workdir), pathlib.Path(a.agents_src))
-        for agent in a.agent:
+        for agent in todo:
             print(f"run {c['id']} {agent} ...", file=sys.stderr, flush=True)
             rec = run_agent(box, c, agent, a)
             with open(out, "a") as f:

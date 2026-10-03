@@ -32,6 +32,10 @@ Usage:
   aspect drift    <spec.yaml> [flags]  re-validate existing code against the spec without regenerating
   aspect inventory <dir> [flags]       deterministic inventory of an existing Go codebase (no model calls)
   aspect import   <dir> [flags]        recover a spec from an existing Go codebase
+  aspect gate plan [flags]             which review agents apply to a change (JSON)
+  aspect gate check <run-dir> [flags]  validate the agents' reports; exit 1 when the gates block
+  aspect gate render <run-dir> [flags] the review result as a Markdown PR comment
+  aspect gate extract -o FILE [input]  save the report an agent printed (claude -p output)
 
 Run flags:
   -out DIR          output directory (default ./out)
@@ -73,6 +77,14 @@ Import flags:
   -concurrency N    packages described in parallel (default 4)
   -model, -effort, -fallbacks as for run
 
+Gate flags:
+  -config FILE      gates.yaml (default .claude/review/gates.yaml)
+  plan:   -base REF (default origin/main; the diff starts at its merge base with head)
+          -head REF (default HEAD)  -o FILE (also write the plan, e.g. <run-dir>/plan.json)
+  check, render: -override (a maintainer overrode the gate)  -public (redact security details)
+  check:  -json (print the result as JSON)
+  A run directory holds plan.json and one <agent>.json report per planned agent.
+
 Credentials come from ANTHROPIC_API_KEY or an "ant auth login" profile.
 `
 
@@ -102,6 +114,8 @@ func main() {
 		err = runInventory(path, os.Args[3:])
 	case "import":
 		err = runImport(path, os.Args[3:])
+	case "gate":
+		err = runGate(path, os.Args[3:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

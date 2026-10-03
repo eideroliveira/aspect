@@ -16,7 +16,9 @@ whether the result achieves the spec's stated goals. Go module
 - `internal/drift` — re-validate existing code against a spec: presence, orphans, tests, verdicts vs baseline.
 - `internal/workspace` — writes proposed files (path-guarded) and runs the profile's toolchain steps.
 - `internal/pipeline` — orchestration and the report.
-- `cmd/aspect` — CLI: `validate`, `expand`, `plan`, `run`, `drift`, `inventory`, `import`.
+- `internal/gate` — review gates: which agents apply to a diff, report validation, pass/warn/block, PR comment. Pure Go, no model, no git.
+- `cmd/aspect` — CLI: `validate`, `expand`, `plan`, `run`, `drift`, `inventory`, `import`, `gate`.
+- `.claude/agents`, `.claude/review`, `.claude/commands` — the review agents, their shared protocol, report schema and `gates.yaml`, and `/review`. See `docs/design.md`.
 - `examples/` — reference specs; CI validates them.
 - `docs/` — architecture and spec format.
 
@@ -29,6 +31,7 @@ whether the result achieves the spec's stated goals. Go module
 - Tests must run without an API key. Use the fake clients in `*_test.go`; never call the network in tests.
 - Stage files explicitly (`git add <path>`), never `git add .` or `-A`.
 - Never squash-merge PRs.
+- `.claude/review/report.schema.json` and `internal/gate/report.go` describe the same document; change both together (a test checks they agree).
 - Every yaml tag on spec structs has a matching json tag; the Synthesizer's output is decoded with encoding/json and snake_case keys would otherwise be dropped silently.
 
 ## Verify

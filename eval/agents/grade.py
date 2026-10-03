@@ -83,7 +83,7 @@ def main():
         if k in done or r["case"] not in cases:
             continue
         tr = cases[r["case"]]["truth"]
-        g = {"key": k, "case": r["case"], "agent": r["agent"], "cost_usd": r.get("cost_usd"),
+        g = {"key": k, "case": r["case"], "agent": r["agent"], "agent_version": r.get("agent_version"), "cost_usd": r.get("cost_usd"),
              "seconds": r.get("seconds"), "report_source": r.get("report_source")}
         findings = (r.get("report") or {}).get("findings")
         if findings is None:

@@ -1,0 +1,241 @@
+# Runs the review agents on every pull request and turns their reports into
+# one check and one sticky comment. See docs/design.md section 3.3.
+#
+# Needs one repository secret: ANTHROPIC_API_KEY (agents run in Claude Code)
+# or GEMINI_API_KEY (agents run in Gemini CLI, restricted by
+# .claude/review/gemini-policy.toml). With both set, Anthropic is used unless
+# the repository variable REVIEW_GATES_PROVIDER is "gemini". It does not run
+# on pull requests from forks (secrets are not exposed to them) or on drafts;
+# a maintainer runs /review locally instead.
+#
+# The review job runs Claude Code over code the PR author controls, with the
+# API key in its environment. That is acceptable only because forks are
+# excluded: everyone who can open a same-repository PR can already push
+# code that CI executes. The job gets no GitHub token and a read-only
+# checkout, and the agents' shell is limited to the commands below (Claude)
+# or in the policy file (Gemini).
+name: Review gates
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-gates-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  OVERRIDE_LABEL: review-gates/override
+  # Tools an agent may use without asking. Agents' own `tools:` lists narrow
+  # this further; judges have no Write or Edit at all.
+  ALLOWED_TOOLS: >-
+    Read,Grep,Glob,
+    Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),
+    Bash(git rev-parse:*),Bash(git ls-files:*),Bash(git merge-base:*),
+    Bash(go test:*),Bash(go vet:*),Bash(go build:*),Bash(go list:*),
+    Bash(./aspect:*),Bash(aspect:*),
+    Bash(mkdir -p .review:*),Bash(cat:*),Bash(rm -rf .review/scratch:*),
+    Bash(ls:*),Bash(wc:*),Bash(head:*),Bash(sed -n:*)
+
+jobs:
+  plan:
+    # Same-repository, non-draft PRs only. A labeled event re-runs only when
+    # the override label was the one added.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review-gates/override')
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.plan.outputs.agents }}
+      run_id: ${{ steps.plan.outputs.run_id }}
+      override: ${{ steps.plan.outputs.override }}
+      provider: ${{ steps.provider.outputs.provider }}
+    steps:
+      - name: Pick the model provider
+        id: provider
+        env:
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
+          PREFER: ${{ vars.REVIEW_GATES_PROVIDER }}
+        run: |
+          if [ "$PREFER" = gemini ] && [ "$HAS_GEMINI" = true ]; then provider=gemini
+          elif [ "$HAS_ANTHROPIC" = true ]; then provider=anthropic
+          elif [ "$HAS_GEMINI" = true ]; then provider=gemini
+          else
+            echo "::error::Review gates need an ANTHROPIC_API_KEY or GEMINI_API_KEY repository secret."
+            exit 1
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "Running the review agents with $provider."
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build aspect
+        run: go build -o aspect ./cmd/aspect
+      - name: Plan
+        id: plan
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          run_id="pr-${{ github.event.pull_request.number }}-${HEAD_SHA:0:12}"
+          ./aspect gate plan -base "origin/$BASE_REF" -head "$HEAD_SHA" -o ".review/$run_id/plan.json" > /dev/null
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "agents=$(jq -c '[.agents[] | {agent, mode, files: (.files | join(","))}]' ".review/$run_id/plan.json")" >> "$GITHUB_OUTPUT"
+          if jq -e --arg l "$OVERRIDE_LABEL" 'index($l) != null' <<<"$LABELS" > /dev/null; then
+            echo "override=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "override=false" >> "$GITHUB_OUTPUT"
+          fi
+          jq -r '.agents[] | "\(.agent) (\(.mode)): \(.reason)"' ".review/$run_id/plan.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-plan
+          path: .review/${{ steps.plan.outputs.run_id }}/plan.json
+          retention-days: 7
+
+  review:
+    name: review (${{ matrix.agent }})
+    needs: plan
+    if: needs.plan.outputs.agents != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install tools
+        env:
+          PROVIDER: ${{ needs.plan.outputs.provider }}
+        run: |
+          go build -o aspect ./cmd/aspect
+          if [ "$PROVIDER" = gemini ]; then
+            npm install -g @google/gemini-cli
+          else
+            npm install -g @anthropic-ai/claude-code
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-plan
+          path: .review/${{ needs.plan.outputs.run_id }}
+      - name: Run ${{ matrix.agent }}
+        env:
+          PROVIDER: ${{ needs.plan.outputs.provider }}
+          ANTHROPIC_API_KEY: ${{ needs.plan.outputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ needs.plan.outputs.provider == 'gemini' && secrets.GEMINI_API_KEY || '' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          RUN_ID: ${{ needs.plan.outputs.run_id }}
+          AGENT: ${{ matrix.agent }}
+          MODE: ${{ matrix.mode }}
+          FILES: ${{ matrix.files }}
+        run: |
+          dir=".review/$RUN_ID"
+          out="$dir/$AGENT.json"
+          transcript="$dir/$AGENT.transcript.json"
+          block=$(jq -r --arg mode "$MODE" --arg out "$out" --arg files "$FILES" \
+            '"base: \(.base)\nhead: \(.head)\nspec: \(.spec)\nmode: \($mode)\nout:  \($out)\nfiles: \($files)"' "$dir/plan.json")
+          # A failed or empty run leaves no report; the final job then blocks.
+          if [ "$PROVIDER" = gemini ]; then
+            # Gemini CLI has no Claude Code subagents: the agent's file, minus
+            # its frontmatter, becomes the prompt, and the policy file stands
+            # in for the agent's tools list.
+            prompt=$(printf 'You are the %s review agent. Follow these instructions exactly.\n\n%s\n\n---\n\n%s\n' \
+              "$AGENT" "$(awk 'f>=2 {print; next} /^---$/ {f++}' ".claude/agents/$AGENT.md")" "$block")
+            model=()
+            [ -n "$GEMINI_MODEL" ] && model=(--model "$GEMINI_MODEL")
+            gemini -p "$prompt" "${model[@]}" \
+              --skip-trust \
+              --approval-mode default \
+              --policy .claude/review/gemini-policy.toml \
+              --output-format json \
+              > "$transcript" || echo "::warning::$AGENT exited with $?"
+          else
+            claude -p "$block" \
+              --agent "$AGENT" \
+              --permission-mode dontAsk \
+              --allowedTools "${ALLOWED_TOOLS//, /,}" \
+              --output-format json \
+              > "$transcript" || echo "::warning::$AGENT exited with $?"
+          fi
+          ./aspect gate extract -o "$out" "$transcript" || echo "::warning::$AGENT printed no report"
+          rm -rf .review/scratch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-${{ matrix.agent }}
+          path: .review/${{ needs.plan.outputs.run_id }}/${{ matrix.agent }}.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gate:
+    needs: [plan, review]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build aspect
+        run: go build -o aspect ./cmd/aspect
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: review-*
+          merge-multiple: true
+          path: .review/${{ needs.plan.outputs.run_id }}
+      - name: Check
+        id: check
+        env:
+          RUN_ID: ${{ needs.plan.outputs.run_id }}
+          OVERRIDE: ${{ needs.plan.outputs.override }}
+          PUBLIC: ${{ !github.event.repository.private }}
+        run: |
+          flags=()
+          [ "$OVERRIDE" = true ] && flags+=(-override)
+          [ "$PUBLIC" = true ] && flags+=(-public)
+          ./aspect gate render ".review/$RUN_ID" "${flags[@]}" > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          ./aspect gate check ".review/$RUN_ID" "${flags[@]}"
+      - name: Comment
+        if: always() && steps.check.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          [ -s comment.md ] || exit 0
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- aspect-review-gates -->")))][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@comment.md > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@comment.md > /dev/null
+          fi
