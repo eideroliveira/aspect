@@ -33,6 +33,30 @@ def sh(*cmd, cwd=None, check=True, **kw):
     return r
 
 
+def fill_submodules(repo, box, head):
+    """Check out each submodule at the commit the PR head pins, from the local clone.
+
+    Without them an agent cannot read forked dependencies or build the project,
+    and reports "could not review the submodule" instead of reviewing it.
+    """
+    tree = sh("git", "ls-tree", "-r", head, cwd=box).stdout
+    for row in tree.splitlines():
+        meta, path = row.split("\t", 1)
+        mode, _, sha = meta.split()
+        src = repo / path
+        if mode != "160000" or not (src / ".git").exists():
+            continue
+        dst = box / path
+        dst.mkdir(parents=True, exist_ok=True)
+        sh("git", "init", "-q", cwd=dst)
+        r = sh("git", "fetch", "-q", "--depth=50", f"--upload-pack={UPLOAD_PACK}", str(src), sha,
+               cwd=dst, check=False)
+        if r.returncode == 0:
+            sh("git", "checkout", "-q", "--detach", sha, cwd=dst)
+        else:
+            print(f"  submodule {path} @ {sha[:9]} not in local clone", file=sys.stderr)
+
+
 def sandbox(repo, case, workdir, agents_src):
     """A fresh repository at the PR head with no refs or objects past it."""
     rv = case["review"]
@@ -45,6 +69,7 @@ def sandbox(repo, case, workdir, agents_src):
        str(repo), rv["head"], rv["base"], cwd=box)
     sh("git", "checkout", "-q", "--detach", rv["head"], cwd=box)
     sh("git", "tag", "review-base", rv["base"], cwd=box)
+    fill_submodules(repo, box, rv["head"])
     # The project's own agents, hooks and settings are not under test.
     claude = box / ".claude"
     for p in ("agents", "hooks", "settings.json", "settings.local.json", "commands", "skills", "worktrees"):
@@ -53,6 +78,10 @@ def sandbox(repo, case, workdir, agents_src):
             shutil.rmtree(t)
         elif t.exists():
             t.unlink()
+    # Hide those removals from `git status`, so agents see a clean tree.
+    gone = [l for l in sh("git", "ls-files", "--deleted", cwd=box).stdout.splitlines() if l]
+    if gone:
+        sh("git", "update-index", "--skip-worktree", *gone, cwd=box)
     for p in ("agents", "review", "commands"):
         s = agents_src / p
         if s.is_dir():
@@ -82,6 +111,16 @@ def last_json_block(text):
         except json.JSONDecodeError:
             continue
     return None
+
+
+def agent_version(src, agent):
+    """Hash of the agent file and shared protocol, so tuning rounds can be compared."""
+    import hashlib
+    h = hashlib.sha256()
+    for f in [src / "agents" / f"{agent}.md", *sorted((src / "review").glob("*"))]:
+        if f.is_file():
+            h.update(f.read_bytes())
+    return h.hexdigest()[:12]
 
 
 def run_agent(box, case, agent, a):
@@ -116,7 +155,8 @@ def run_agent(box, case, agent, a):
         report = last_json_block(meta.get("result"))
         source = "message" if report else None
     return {
-        "case": case["id"], "agent": agent, "mode": a.mode, "model": a.model or "default",
+        "case": case["id"], "agent": agent,
+        "agent_version": agent_version(pathlib.Path(a.agents_src), agent), "mode": a.mode, "model": a.model or "default",
         "started": started.isoformat(), "seconds": round(secs),
         "exit": r.returncode, "stderr": r.stderr[-2000:],
         "cost_usd": meta.get("total_cost_usd"), "turns": meta.get("num_turns"),
