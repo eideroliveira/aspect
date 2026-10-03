@@ -42,8 +42,8 @@ The agents inherit the rules that make Aspect's own pipeline trustworthy
   traces back to something the spec states: a goal, an invariant, a
   scenario, a surface. A behaviour the spec does not state is either a spec
   gap (the spec keeper's job) or a defect.
-- **Evidence or it did not happen.** A finding names a file and line, and
-  either a reproduction or the reasoning that leads there. A finding without
+- **Evidence or it did not happen.** A finding names a file (and a line, unless it is
+  about the whole file) and either a reproduction or the reasoning that leads there. A finding without
   a location can inform but never block.
 - **Silence never means success.** A gate agent that produced no report, or
   a malformed one, fails its gate. A missing verdict is never read as a pass.
@@ -156,9 +156,14 @@ aspect validate <spec>            # the spec is well formed and closed
 aspect drift <spec> -out . -no-llm  # presence, orphans and tests against the code
 ```
 
-A repository with no spec gets one from the spec keeper before any other
-gate can block: `aspect import` for Go, written by hand from SPEC.md
-otherwise. Until then the other gates run advisory only.
+A repository with no spec keeps its gates blocking. The judges review
+against what the repository does state (the README, the docs, `CLAUDE.md`
+files and the existing tests), note the missing spec once as an `info`
+finding, and block on real findings exactly as they would with a spec. The
+spec keeper, with nothing to drift from, reports no `spec-drift` findings;
+it reports one whole-file `info` finding at the spec path recommending a
+bootstrap (4.1): `aspect import` for Go, written by hand from SPEC.md
+otherwise. The lockstep rule applies from the PR that adds the spec.
 
 **Lockstep rule.** A change that alters behaviour a user or another module
 can observe changes the spec in the same PR. The spec keeper's gate enforces
@@ -237,7 +242,9 @@ Field rules:
   `performance`, `design`, `test-gap`, `docs`, `data`. Agents use the
   category that names the harm, not their own name.
 - `location` is required for any severity above `info`. `line` is 1-based
-  and refers to the **head** version of the file.
+  and refers to the **head** version of the file. It is optional: omit it for
+  a finding about a whole file, such as a missing one, which is located at the
+  path where the file should be. `end_line` requires `line`.
 - `spec_ref` names the goal, module, invariant, scenario or surface the
   finding is about, in the spec's own reference syntax. Empty only for
   findings that the spec cannot speak to (then the spec keeper is a likely
