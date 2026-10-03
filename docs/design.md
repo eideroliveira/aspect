@@ -552,9 +552,12 @@ accident.
   goal: a goal the code no longer serves becomes a finding for a human,
   because dropping a goal is a product decision.
 - *bootstrap:* in a repository without a spec, runs `aspect import . -o
-  _aspect/aspect.yaml` (Go) or drafts `_aspect/aspect.yaml` from the code and
-  README, and reports every intent and goal it inferred as `info` findings
-  for the owner to confirm.
+  _aspect/aspect.yaml` for Go, so the model's Describer and Synthesizer
+  write the spec, then reviews it against the code; without credentials
+  for the model it stops and says so rather than drafting by hand. In other
+  languages it drafts `_aspect/aspect.yaml` from the code and README. It
+  reports every intent and goal as `info` findings for the owner to
+  confirm.
 
 **Runs.** As a gate on every PR. In author mode on request, or as a
 follow-up when its own gate failed.

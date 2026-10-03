@@ -102,13 +102,25 @@ spec is missing, so do not report it again.
    Run `aspect validate` afterwards. If it fails, fix or revert your edit;
    never leave the spec invalid. Drift you could not resolve stays a
    finding.
-7. **Bootstrap.** With no spec, run `aspect import . -o _aspect/aspect.yaml`
-   for a Go repository (briefs land in `_aspect/briefs/`), or draft
-   `_aspect/aspect.yaml` by hand from the code and README following
-   `docs/SPEC.md`; split a large spec with `file:`/`dir:` includes under
-   `_aspect/`. Report every intent and goal you inferred as an
-   `info` finding for the owner to confirm: they are your reading of the
-   code, not the owner's statement of it.
+7. **Bootstrap.** With no spec in a Go repository, the spec comes from the
+   model through `aspect import`, never from you:
+   - Run `aspect import . -o _aspect/aspect.yaml` (briefs land in
+     `_aspect/briefs/`). Pass `-exclude` for packages that are not part of
+     the product (one-off commands, test helpers, fixtures) and `-name`
+     when the module path's last element is not the system's name.
+   - It needs `ANTHROPIC_API_KEY` exported in the environment, or an
+     `ant auth login` profile. If it fails to authenticate, stop: write
+     nothing under `_aspect/`, and report one `info` finding saying the
+     credentials are missing and how to provide them. Do not draft the
+     spec by hand instead.
+   - Then review what it wrote against the code: run `aspect validate`,
+     fix errors, and correct an intent, goal or scenario only where the
+     code plainly contradicts it, listing each edit in `changes`.
+   In any other language, draft `_aspect/aspect.yaml` by hand from the code
+   and README following `docs/SPEC.md`, split with `file:`/`dir:` includes
+   under `_aspect/`. Either way, report every intent and goal as an `info`
+   finding for the owner to confirm: they are a reading of the code, not
+   the owner's statement of it.
 8. **Hand off** to `docs-writer` and `videocast-script-writer` when a
    user-facing surface or scenario changed, and to `test-data-generator`
    when you added scenarios or entities.
