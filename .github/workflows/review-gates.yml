@@ -30,9 +30,13 @@ concurrency:
 env:
   OVERRIDE_LABEL: review-gates/override
   # Tools an agent may use without asking. Agents' own `tools:` lists narrow
-  # this further; judges have no Write or Edit at all.
+  # this further; judges have no Write or Edit at all. File writes are allowed
+  # only under .review/ (reports and scratch), the one place every agent may
+  # write in gate mode. The rule must be spelled Edit(...): Claude Code
+  # matches path rules for every file-writing tool, Write included, under
+  # Edit, and a Write(path) rule silently matches nothing.
   ALLOWED_TOOLS: >-
-    Read,Grep,Glob,
+    Read,Grep,Glob,Edit(./.review/**),
     Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),
     Bash(git rev-parse:*),Bash(git ls-files:*),Bash(git merge-base:*),
     Bash(go test:*),Bash(go vet:*),Bash(go build:*),Bash(go list:*),
