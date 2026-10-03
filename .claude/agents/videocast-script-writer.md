@@ -22,7 +22,7 @@ them.
 ## Before you start
 
 Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
-`aspect.yaml`, with its includes and briefs). For you the sources are the
+`_aspect/aspect.yaml`, with its includes and briefs). For you the sources are the
 user-facing surfaces in `interfaces` (`web`, `app`, `cli`), the goals they
 serve (the video's promise is a goal in the user's words), and `scenarios`
 (the stories worth showing). Then read the feature's user documentation and

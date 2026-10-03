@@ -119,7 +119,9 @@ func TestRunMirrorsPackages(t *testing.T) {
 	}
 
 	// The YAML round-trips through the loader.
-	path := filepath.Join(t.TempDir(), "aspect.yaml")
+	// The default output, _aspect/aspect.yaml, lives in a directory that
+	// does not exist yet; Write creates it.
+	path := filepath.Join(t.TempDir(), "_aspect", "aspect.yaml")
 	if err := Write(path, s, res.Warnings, res.Briefs); err != nil {
 		t.Fatal(err)
 	}

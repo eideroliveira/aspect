@@ -10,7 +10,7 @@ features.
 
 The agents are open source and meant to be dropped into any repository. Their
 first real user is gosite, a Go codebase; they are developed and
-versioned here, in the Aspect repository. A repository with no `aspect.yaml` yet
+versioned here, in the Aspect repository. A repository with no spec yet
 starts with the spec keeper's bootstrap (section 4.1).
 
 Sections 1 to 3 are the **conventions** every agent follows. Agents are built
@@ -88,6 +88,9 @@ docs/
   guide/                       task-oriented user guides (docs-writer)
   videocasts/<feature>.md      videocast scripts (videocast writer)
 .review/                       per-run reports, gitignored
+_aspect/                       the repository's Aspect spec (section 2.3), owned by spec-keeper
+  aspect.yaml                  entry point
+  briefs/                      module briefs
 ```
 
 Nothing goes in `.claude/agents/` except agent definitions: Claude Code loads
@@ -132,10 +135,21 @@ Read .claude/review/PROTOCOL.md and the spec (section 2.3). ...
 
 ### 2.3 The spec
 
-The spec is the **Aspect spec**: `aspect.yaml` at the repository root (or the
-path set as `spec:` in `gates.yaml`), split with `file`/`dir` includes and
-carrying briefs, exactly as [SPEC.md](SPEC.md) defines it. The agents do not
-invent a second format.
+The spec is the **Aspect spec**: `_aspect/aspect.yaml` (or the path set as
+`spec:` in `gates.yaml`), split with `file`/`dir` includes and carrying
+briefs, exactly as [SPEC.md](SPEC.md) defines it. The agents do not invent a
+second format.
+
+Everything the spec is made of lives under `_aspect/`: the entry point, the
+files it includes and its `briefs/`. One directory keeps the spec out of the
+repository root, gives it one path for `gates.yaml` globs and code owners,
+and sorts it apart from the code it describes. Include paths and
+`system.dependencies` are relative to the file that names them, so the
+directory moves as a unit. A repository that still has `aspect.yaml` at its
+root keeps working: when `gates.yaml` names no `spec`, `aspect gate plan`
+uses `_aspect/aspect.yaml` and falls back to the root file. Moving it is a
+`git mv` of the entry point, its includes and its briefs into `_aspect/`,
+plus `../` on each `system.dependencies` path that leaves the directory.
 
 How each part of the spec is used by the agents:
 
@@ -178,7 +192,7 @@ passes these in the prompt, always in this form:
 ```
 base: <sha or ref>      default: the merge base with origin/main
 head: <sha or ref>      default: HEAD
-spec: <path>            default: aspect.yaml
+spec: <path> | none     default: _aspect/aspect.yaml
 mode: gate | advisory | author
 out:  .review/<run-id>/<agent>.json
 ```
@@ -322,7 +336,7 @@ The usual handoffs:
 
 | Agent | Kind | Tools | May write |
 |---|---|---|---|
-| spec-keeper | author + gate | Read, Grep, Glob, Bash, Edit, Write | the spec files, `briefs/` |
+| spec-keeper | author + gate | Read, Grep, Glob, Bash, Edit, Write | `_aspect/` (the spec, its includes and briefs) |
 | adversarial-reviewer | judge | Read, Grep, Glob, Bash | nothing |
 | architect | judge | Read, Grep, Glob, Bash | nothing; an ADR it proposes goes in the report, and the orchestrator writes it to `docs/adr/` when a human accepts it |
 | security-red-team | judge | Read, Grep, Glob, Bash | nothing (scratch files only under `.review/`) |
@@ -357,7 +371,7 @@ people other than the maintainer.
 ### 3.1 `gates.yaml`
 
 ```yaml
-spec: aspect.yaml
+spec: _aspect/aspect.yaml          # the default; omit it to also accept a root aspect.yaml
 gates:
   - agent: spec-keeper
     paths: ["**"]                  # every change is checked for lockstep
@@ -369,7 +383,7 @@ gates:
     paths: ["**/*.go", "**/*.swift", "**/Dockerfile", ".github/**"]
     mode: gate
   - agent: architect
-    paths: ["aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**"]
+    paths: ["_aspect/**", "go.mod", "internal/**"]
     mode: advisory
     when: { min_changed_lines: 200 }   # or a new module, dependency or interface
 thresholds:
@@ -537,9 +551,10 @@ accident.
   is listed in `changes` with the code that justifies it. It never deletes a
   goal: a goal the code no longer serves becomes a finding for a human,
   because dropping a goal is a product decision.
-- *bootstrap:* in a repository without a spec, runs `aspect import` (Go) or
-  drafts `aspect.yaml` from the code and README, and reports every intent and
-  goal it inferred as `info` findings for the owner to confirm.
+- *bootstrap:* in a repository without a spec, runs `aspect import . -o
+  _aspect/aspect.yaml` (Go) or drafts `_aspect/aspect.yaml` from the code and
+  README, and reports every intent and goal it inferred as `info` findings
+  for the owner to confirm.
 
 **Runs.** As a gate on every PR. In author mode on request, or as a
 follow-up when its own gate failed.

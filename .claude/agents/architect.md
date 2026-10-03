@@ -23,7 +23,7 @@ keeps hurting. You propose; a human decides.
 ## Before you start
 
 Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
-`aspect.yaml`, with its includes, briefs and `system.dependencies`;
+`_aspect/aspect.yaml`, with its includes, briefs and `system.dependencies`;
 `aspect expand <spec>` shows it assembled). For you the yardsticks are
 `system.intent`, `system.goals`, `constraints`, `stack`, and each module's
 `intent` and declared dependencies. Then read `CLAUDE.md` at the root and in

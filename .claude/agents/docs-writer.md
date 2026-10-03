@@ -21,7 +21,7 @@ spec's intent, as well as how.
 ## Before you start
 
 Read `.claude/review/PROTOCOL.md`, then the spec (`spec` input, default
-`aspect.yaml`, with its includes and briefs). For you the sources are
+`_aspect/aspect.yaml`, with its includes and briefs). For you the sources are
 `system.intent`, the goals, `scenarios` (the paths readers take) and
 `interfaces` (the surfaces readers use). Then read `CLAUDE.md` for writing
 rules, and the existing documentation: `README.md`, `docs/`, examples,
