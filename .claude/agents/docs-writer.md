@@ -48,10 +48,10 @@ docs, write nothing). Optionally, the caller adds:
    doc comments for each name, including the old ones. Stale mentions hide
    in examples and tables.
 3. **Verify.** Build the tool from `head` and run each command you will
-   document, in a scratch directory under `.review/<run-id>/` when it writes
-   files. Keep the real output. A command that needs credentials or the
-   network is checked against the source and `--help` instead, and reported
-   as unverified.
+   document, in `.review/scratch/docs-writer/` when it writes files; delete
+   the scratch directory before you finish. Keep the real output. A command
+   that needs credentials or the network is checked against the source and
+   `--help` instead, and reported as unverified.
 4. **Write** (author mode). Edit each affected page in place, matching its
    structure, heading depth, tone and table formats. Add a page only when no
    existing one is the right home (task guides go in `docs/guide/`), and

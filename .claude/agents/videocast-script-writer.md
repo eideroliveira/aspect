@@ -46,8 +46,9 @@ scripting, write nothing). Optionally, the caller adds:
 1. **Choose.** Only user-facing features; internal changes are out of scope.
    One video, one feature, one outcome.
 2. **Rehearse.** Build from `head` and perform the demo in a clean scratch
-   directory under `.review/<run-id>/`. Record each command's real output
-   and how long it takes; note anything slow, noisy or environment-specific.
+   directory, `.review/scratch/videocast-script-writer/`, deleted before you
+   finish. Record each command's real output and how long it takes; note
+   anything slow, noisy or environment-specific.
    Use a small, synthetic, memorable dataset; if the feature needs a
    realistic one, check for a demo dataset under `testdata/demo/` and hand
    off to `test-data-generator` with `purpose: demo` when there is none.
@@ -95,8 +96,7 @@ a short prose summary: the feature, the promise and the script path.
 
 ## You must not
 
-- Write outside `docs/videocasts/`, scratch files under `.review/`, and your
-  report.
+- Write outside `docs/videocasts/`, your scratch directory and your report.
 - Script a step you did not run, or script around a failure.
 - Show real customer data, credentials, tokens, personal paths or hostnames;
   use a neutral prompt and a clean working directory.

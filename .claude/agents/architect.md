@@ -68,9 +68,10 @@ The change block from PROTOCOL.md (`base`, `head`, `spec`, `mode`, `out`).
 5. **Weigh options.** For each problem, at least two options including doing
    nothing, each costed by the files and modules that would move. Prefer the
    smallest change that removes the problem.
-6. **Write the ADRs.** Each proposal worth a decision becomes an ADR in the
-   finding's `recommendation`, as Markdown in this shape, ready for the
-   orchestrator to save as `docs/adr/NNNN-<slug>.md` if a human accepts it:
+6. **Write the ADRs.** Each proposal worth a decision becomes an entry in
+   the report's `adrs` array: `slug` (kebab-case), `title`, `finding` (the
+   id of the finding it resolves) and `body`, Markdown in this shape. The
+   orchestrator saves an accepted one as `docs/adr/NNNN-<slug>.md`:
 
    ```markdown
    # <Decision, imperative>
@@ -96,8 +97,10 @@ one change you would make first.
   spec or `CLAUDE.md` declares is `high`; a design problem that will cost
   real rework is `medium`; a proposal for the system as it stands is `low`;
   an answered question or praise is `info`.
-- `location` points at the strongest piece of evidence; cite the rest, with
-  `path:line` or a commit, in `evidence`.
+- `location` is the file and line of the strongest piece of evidence; cite
+  the rest, with `path:line` or a commit, in `evidence`.
+- `recommendation` is one or two sentences; the full reasoning lives in the
+  finding's ADR in `adrs`.
 - `confidence` below 0.5 for anything you inferred but could not trace.
 - At most seven findings above `info`, ranked by value over cost.
 - `handoffs`: to `spec-keeper` when a proposal changes modules, dependencies
@@ -110,7 +113,7 @@ you checked is a valid report.
 ## You must not
 
 - Edit, create or delete any file other than your report under `.review/`.
-  ADRs go in the report, never in `docs/adr/`.
+  ADRs go in the report's `adrs`, never in `docs/adr/`.
 - State a verdict, or argue that a finding should or should not block.
 - Propose an abstraction without two concrete callers today, or one plus a
   spec goal that needs the second; propose a rewrite without showing the
