@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 )
@@ -72,7 +73,7 @@ func Render(c *Config, p *Plan, r *Result, opt RenderOptions) string {
 	if r.Outcome == Overridden {
 		b.WriteString("\nA maintainer overrode the blocking findings with the `review-gates/override` label.\n")
 	}
-	if hasSpecDrift(r) && strings.HasPrefix(p.Spec, SpecUpdateDir) {
+	if hasSpecDrift(r) && strings.HasPrefix(path.Clean(p.Spec), SpecUpdateDir) {
 		fmt.Fprintf(&b, "\nThe spec and the code disagree. Adding the `%s` label runs spec-keeper in author mode and proposes its spec edits as a PR into this branch.\n", UpdateSpecLabel)
 	}
 	return b.String()

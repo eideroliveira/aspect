@@ -382,6 +382,7 @@ func TestRender(t *testing.T) {
 		{"info drift", "spec-keeper", drift("spec-keeper", "info"), "_aspect/aspect.yaml", false},
 		{"drift from another agent", "adversarial-reviewer", drift("adversarial-reviewer", "high"), "_aspect/aspect.yaml", false},
 		{"root spec the workflow cannot edit", "spec-keeper", drift("spec-keeper", "high"), LegacySpec, false},
+		{"spec named with ./", "spec-keeper", drift("spec-keeper", "high"), "./_aspect/aspect.yaml", true},
 	} {
 		rs := map[string]Input{}
 		for k, v := range reports {
