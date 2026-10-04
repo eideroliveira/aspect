@@ -365,11 +365,36 @@ func TestRender(t *testing.T) {
 		t.Error("offered the spec update with no spec drift")
 	}
 
-	drift := finding("spec-keeper/1", "high", 0.9)
-	drift.Category = "spec-drift"
-	reports["spec-keeper"] = Input{Data: report("spec-keeper", "gate", drift)}
-	if got := Render(c, p, Check(c, p, reports, false), RenderOptions{}); !strings.Contains(got, "`"+UpdateSpecLabel+"` label") {
-		t.Errorf("spec drift render does not offer the update label:\n%s", got)
+	drift := func(agent, severity string) Finding {
+		f := finding(agent+"/1", severity, 0.9)
+		f.Category = "spec-drift"
+		return f
+	}
+	for _, tc := range []struct {
+		name  string
+		agent string
+		f     Finding
+		spec  string
+		offer bool
+	}{
+		{"blocking drift", "spec-keeper", drift("spec-keeper", "high"), "_aspect/aspect.yaml", true},
+		{"warning drift", "spec-keeper", drift("spec-keeper", "medium"), "_aspect/aspect.yaml", true},
+		{"info drift", "spec-keeper", drift("spec-keeper", "info"), "_aspect/aspect.yaml", false},
+		{"drift from another agent", "adversarial-reviewer", drift("adversarial-reviewer", "high"), "_aspect/aspect.yaml", false},
+		{"root spec the workflow cannot edit", "spec-keeper", drift("spec-keeper", "high"), LegacySpec, false},
+	} {
+		rs := map[string]Input{}
+		for k, v := range reports {
+			rs[k] = v
+		}
+		rs["spec-keeper"] = Input{Data: report("spec-keeper", "gate")}
+		rs[tc.agent] = Input{Data: report(tc.agent, "gate", tc.f)}
+		pl := *p
+		pl.Spec = tc.spec
+		got := Render(c, &pl, Check(c, &pl, rs, false), RenderOptions{})
+		if strings.Contains(got, "`"+UpdateSpecLabel+"` label") != tc.offer {
+			t.Errorf("%s: offer = %v, want %v:\n%s", tc.name, !tc.offer, tc.offer, got)
+		}
 	}
 }
 

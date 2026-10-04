@@ -72,7 +72,7 @@ func Render(c *Config, p *Plan, r *Result, opt RenderOptions) string {
 	if r.Outcome == Overridden {
 		b.WriteString("\nA maintainer overrode the blocking findings with the `review-gates/override` label.\n")
 	}
-	if hasSpecDrift(r) {
+	if hasSpecDrift(r) && strings.HasPrefix(p.Spec, SpecUpdateDir) {
 		fmt.Fprintf(&b, "\nThe spec and the code disagree. Adding the `%s` label runs spec-keeper in author mode and proposes its spec edits as a PR into this branch.\n", UpdateSpecLabel)
 	}
 	return b.String()
@@ -81,6 +81,12 @@ func Render(c *Config, p *Plan, r *Result, opt RenderOptions) string {
 // UpdateSpecLabel is the PR label that runs spec-keeper in author mode on
 // the PR (.github/workflows/spec-update.yml).
 const UpdateSpecLabel = "review-gates/update-spec"
+
+// SpecUpdateDir is the only directory the spec-update workflow lets
+// spec-keeper write, so the label is offered only for a spec inside it: a
+// root aspect.yaml, or a spec gates.yaml puts elsewhere, cannot be updated
+// that way.
+const SpecUpdateDir = "_aspect/"
 
 // hasSpecDrift reports whether spec-keeper found drift a spec edit could
 // close: a spec-drift finding that blocks or warns.

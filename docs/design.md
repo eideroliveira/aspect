@@ -449,7 +449,8 @@ Rules:
 
 `.github/workflows/spec-update.yml` runs when a maintainer adds the
 `review-gates/update-spec` label to a PR. The rendered gate comment offers
-the label whenever spec-keeper reports `spec-drift`.
+the label whenever spec-keeper reports `spec-drift` on a spec under
+`_aspect/`, the only directory the workflow lets it write.
 
 1. An `author` job runs spec-keeper in `author` mode on the PR's change
    (the same base and head as the gates) with the API key and no GitHub
