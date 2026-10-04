@@ -1,0 +1,240 @@
+# Updates the spec from a pull request: adding the `review-gates/update-spec`
+# label runs spec-keeper in author mode on the PR's change, and its edits to
+# _aspect/ become a separate PR into the PR's branch for a human to merge.
+# See docs/design.md section 3.3. The review gates never write to the branch
+# they judge; this workflow does not either.
+#
+# Two jobs, so the agent never holds a write token:
+#   author   runs spec-keeper over code the PR author controls, with the
+#            Anthropic API key and no GitHub token; its file writes are
+#            limited to _aspect/ and .review/. It turns the agent's _aspect/
+#            edits into a patch and checks that the spec still validates.
+#   propose  holds contents: write and pull-requests: write and runs no
+#            model and no code from the PR. It accepts only regular files
+#            under _aspect/ from the patch, commits them to
+#            aspect/spec-update/pr-<n> and opens a PR into the PR's branch.
+#            Without the repository setting "Allow GitHub Actions to create
+#            and approve pull requests" GitHub refuses that, and the job
+#            comments a link that opens the PR in one click instead.
+#
+# Needs ANTHROPIC_API_KEY: Gemini CLI has no per-path write rule, so the
+# author run is Claude Code only. Same-repository, non-draft PRs only, for
+# the reason given in review-gates.yml. The label is removed when the run
+# ends, so adding it again re-runs it; a re-run replaces the proposal.
+name: Spec update
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# Only the update label shares a group, so another label added meanwhile
+# cannot cancel a run in progress.
+concurrency:
+  group: >-
+    spec-update-${{ github.event.pull_request.number }}${{
+    github.event.label.name != 'review-gates/update-spec' &&
+    format('-ignored-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+env:
+  UPDATE_LABEL: review-gates/update-spec
+  # As in review-gates.yml, plus writes under _aspect/. Path rules are
+  # spelled Edit(...) for every file-writing tool.
+  ALLOWED_TOOLS: >-
+    Read,Grep,Glob,Edit(./_aspect/**),Edit(./.review/**),
+    Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),
+    Bash(git rev-parse:*),Bash(git ls-files:*),Bash(git merge-base:*),
+    Bash(go list:*),Bash(./aspect:*),Bash(aspect:*),
+    Bash(mkdir -p .review:*),Bash(mkdir -p _aspect:*),Bash(cat:*),
+    Bash(ls:*),Bash(wc:*),Bash(head:*),Bash(sed -n:*)
+
+jobs:
+  author:
+    if: >-
+      github.event.label.name == 'review-gates/update-spec' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+    steps:
+      - name: Check the API key
+        env:
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_ANTHROPIC" != true ]; then
+            echo "::error::The spec update needs an ANTHROPIC_API_KEY repository secret."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install tools
+        run: |
+          go build -o aspect ./cmd/aspect
+          npm install -g @anthropic-ai/claude-code
+      - name: Run spec-keeper
+        id: run
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          dir=".review/spec-pr-$PR-${HEAD_SHA:0:12}"
+          ./aspect gate plan -base "origin/$BASE_REF" -head "$HEAD_SHA" -o "$dir/plan.json" > /dev/null
+          base=$(jq -r .base "$dir/plan.json")
+          spec=$(jq -r .spec "$dir/plan.json")
+          out="$dir/spec-keeper.json"
+          block=$(printf 'base: %s\nhead: %s\nspec: %s\nmode: author\nout:  %s\n' "$base" "$HEAD_SHA" "$spec" "$out")
+          claude -p "$block" \
+            --agent spec-keeper \
+            --permission-mode dontAsk \
+            --allowedTools "${ALLOWED_TOOLS//, /,}" \
+            --output-format json \
+            > "$dir/spec-keeper.transcript.json" || echo "::warning::spec-keeper exited with $?"
+          ./aspect gate extract -o "$out" "$dir/spec-keeper.transcript.json" || echo "::warning::spec-keeper printed no report"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "spec=$spec" >> "$GITHUB_OUTPUT"
+      - name: Collect the spec edits
+        id: patch
+        env:
+          DIR: ${{ steps.run.outputs.dir }}
+          SPEC: ${{ steps.run.outputs.spec }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          stray=$(git status --porcelain --untracked-files=all -- . ':(exclude)_aspect' ':(exclude).review' ':(exclude)aspect')
+          if [ -n "$stray" ]; then
+            echo "::warning::spec-keeper changed files outside _aspect/; they are discarded:"
+            echo "$stray"
+          fi
+          # A path given to git add stages its deletions too.
+          if [ -e _aspect ] || [ -n "$(git ls-files -- _aspect)" ]; then
+            git add -- _aspect
+          fi
+          git diff --cached --binary -- _aspect > "$DIR/spec.patch"
+          if [ -s "$DIR/spec.patch" ]; then
+            entry=$SPEC
+            [ "$entry" = none ] && entry=_aspect/aspect.yaml
+            # The agent must leave the spec valid; a proposal that is not
+            # valid is not opened.
+            ./aspect validate "$entry"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          # The PR body, built here so the propose job runs nothing but git
+          # and gh. Model text is untrusted: no HTML, no code spans to break
+          # out of, no @mentions.
+          report="$DIR/spec-keeper.json"
+          [ -s "$report" ] || echo '{}' > "$report"
+          jq -r --arg pr "$PR" '
+            def esc: tostring | gsub("[<>]"; "") | gsub("`"; "\u0027") | gsub("@"; "@\u200b");
+            "<!-- aspect-spec-update -->",
+            "spec-keeper ran in author mode on #\($pr) and proposes these spec edits. Merge this PR into the branch of #\($pr) to keep the spec in lockstep with it.",
+            "",
+            (.summary // "spec-keeper printed no report." | esc),
+            (if (.changes // []) | length > 0 then
+              "", "**Changes**", "", (.changes[] | "- `\(.file | esc)`: \(.reason | esc)")
+            else empty end),
+            (if (.findings // []) | length > 0 then
+              "", "**Left for a human**", "", (.findings[] | "- \(.severity | esc): \(.title | esc)")
+            else empty end)
+          ' "$report" > "$DIR/body.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spec-update
+          path: |
+            ${{ steps.run.outputs.dir }}/spec.patch
+            ${{ steps.run.outputs.dir }}/body.md
+            ${{ steps.run.outputs.dir }}/spec-keeper.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  propose:
+    needs: author
+    if: always() && needs.author.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.author.outputs.changed == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/download-artifact@v4
+        if: needs.author.result == 'success'
+        with:
+          name: spec-update
+          path: ${{ runner.temp }}/spec-update
+      - name: Open the spec PR
+        if: needs.author.result == 'success'
+        env:
+          CHANGED: ${{ needs.author.outputs.changed }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/spec-update"
+          if [ "$CHANGED" != true ]; then
+            { echo "spec-keeper found nothing to change in the spec for this PR."; echo; tail -n +4 "$d/body.md"; } > note.md
+            gh pr comment "$PR" --repo "$REPO" --body-file note.md
+            exit 0
+          fi
+          git apply --index "$d/spec.patch"
+          # Only regular files under _aspect/: no other path, no symlink, no
+          # submodule. A patch that strays is refused whole.
+          bad=$(git diff --cached --raw --no-renames HEAD | awk '
+            { split($0, f, "\t"); split(f[1], m, " "); path = f[2] }
+            path !~ /^_aspect\// || path ~ /(^|\/)\.\.(\/|$)/ { print path; next }
+            m[2] ~ /^(120000|160000)$/ { print path }
+          ')
+          if [ -n "$bad" ]; then
+            echo "::error::The spec patch touches paths outside _aspect/ or non-regular files:"
+            echo "$bad"
+            exit 1
+          fi
+          branch="aspect/spec-update/pr-$PR"
+          git checkout -q -B "$branch"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "spec: catch the spec up with #$PR"
+          git push -q --force origin "$branch"
+          title="spec: catch the spec up with #$PR"
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json url -q '.[0].url')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$REPO" --body-file "$d/body.md" > /dev/null
+            gh pr comment "$PR" --repo "$REPO" --body "spec-keeper updated its proposed spec edits: $existing"
+          elif url=$(gh pr create --repo "$REPO" --base "$HEAD_REF" --head "$branch" --title "$title" --body-file "$d/body.md" 2> create.err); then
+            gh pr comment "$PR" --repo "$REPO" --body "spec-keeper proposes spec edits for this change: $url"
+          else
+            cat create.err
+            link="$SERVER/$REPO/compare/$HEAD_REF...$branch?expand=1&title=$(jq -rn --arg s "$title" '$s | @uri')"
+            { echo "spec-keeper proposes spec edits for this change on \`$branch\`. GitHub Actions may not open pull requests in this repository, so [open the PR]($link) yourself (base: this PR's branch)."; echo; tail -n +3 "$d/body.md"; } > note.md
+            gh pr comment "$PR" --repo "$REPO" --body-file note.md
+          fi
+      - name: Report a failed run
+        if: needs.author.result != 'success'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh pr comment "$PR" --repo "$REPO" --body "The spec update did not finish; see $RUN_URL. Add the label again to retry."
+      - name: Remove the label
+        if: always()
+        run: gh pr edit "$PR" --repo "$REPO" --remove-label "$UPDATE_LABEL" > /dev/null || true

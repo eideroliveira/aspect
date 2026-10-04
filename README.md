@@ -201,6 +201,11 @@ an `ANTHROPIC_API_KEY` secret (agents run in Claude Code) or a
 `REVIEW_GATES_PROVIDER=gemini` to prefer Gemini. The design is in
 [docs/design.md](docs/design.md).
 
+When the spec keeper finds drift, the `review-gates/update-spec` label on
+the PR runs it in author mode (`.github/workflows/spec-update.yml`, Claude
+Code only): its edits to `_aspect/` come back as a PR into the PR's branch,
+for a human to merge.
+
 `/implement [spec ref]` closes the loop from the other side: the main
 Claude Code session builds what the spec states and the code lacks, with a
 test per operation contract, invariant and scenario, then runs `/review`

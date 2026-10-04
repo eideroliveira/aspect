@@ -7,7 +7,8 @@ the design document wins and this file is fixed in the same PR.
 ## 1. The change block
 
 The orchestrator (`/review` locally, `.github/workflows/review-gates.yml` in
-CI) starts you with this block:
+CI, and `.github/workflows/spec-update.yml` for spec-keeper in author mode on
+a PR) starts you with this block:
 
 ```
 base: <sha>        the merge base with the target branch

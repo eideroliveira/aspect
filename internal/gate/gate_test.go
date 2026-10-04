@@ -361,6 +361,16 @@ func TestRender(t *testing.T) {
 	if !strings.Contains(empty, "No gate applies") {
 		t.Errorf("empty plan render:\n%s", empty)
 	}
+	if strings.Contains(private, UpdateSpecLabel) {
+		t.Error("offered the spec update with no spec drift")
+	}
+
+	drift := finding("spec-keeper/1", "high", 0.9)
+	drift.Category = "spec-drift"
+	reports["spec-keeper"] = Input{Data: report("spec-keeper", "gate", drift)}
+	if got := Render(c, p, Check(c, p, reports, false), RenderOptions{}); !strings.Contains(got, "`"+UpdateSpecLabel+"` label") {
+		t.Errorf("spec drift render does not offer the update label:\n%s", got)
+	}
 }
 
 // TestSchemaMatchesValidator keeps report.schema.json and the Go validator

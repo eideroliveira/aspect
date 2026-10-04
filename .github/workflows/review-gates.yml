@@ -23,8 +23,17 @@ on:
 permissions:
   contents: read
 
+# A newer run cancels the one in progress, and a run cancels even when all of
+# its jobs are then skipped. So a label the plan job ignores (any but the
+# override label; `gh pr create --label` fires `labeled` beside `opened`, and
+# review-gates/update-spec is added to a PR under review) gets a group of its
+# own, or adding it would cancel the review.
 concurrency:
-  group: review-gates-${{ github.event.pull_request.number }}
+  group: >-
+    review-gates-${{ github.event.pull_request.number }}${{
+    github.event.action == 'labeled' &&
+    github.event.label.name != 'review-gates/override' &&
+    format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:

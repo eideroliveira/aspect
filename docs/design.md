@@ -440,9 +440,35 @@ Rules:
   `/review` before discussing it in public.
 - Authoring agents do not run in the gate workflow. They run on request
   (locally, or through a labelled workflow that opens its own PR), so a gate
-  never writes to the branch it is judging.
+  never writes to the branch it is judging. The first such workflow is the
+  spec update, below.
 - A gate can be overridden only by a maintainer adding the
   `review-gates/override` label, which the final job records in the comment.
+
+#### Updating the spec from a pull request
+
+`.github/workflows/spec-update.yml` runs when a maintainer adds the
+`review-gates/update-spec` label to a PR. The rendered gate comment offers
+the label whenever spec-keeper reports `spec-drift`.
+
+1. An `author` job runs spec-keeper in `author` mode on the PR's change
+   (the same base and head as the gates) with the API key and no GitHub
+   token. Its file writes are limited to `_aspect/` and `.review/`. The job
+   keeps only the `_aspect/` edits, as a patch, and refuses one after which
+   `aspect validate` fails.
+2. A `propose` job holds the write token and runs neither a model nor code
+   from the PR. It accepts only regular files under `_aspect/` from the
+   patch, commits them to `aspect/spec-update/pr-<n>` and opens a PR into
+   the PR's branch. When the repository does not let GitHub Actions open
+   pull requests, it comments a link that opens one instead.
+3. The label is removed at the end, so adding it again re-runs the update,
+   replacing the earlier proposal.
+
+The proposal is a PR, never a push to the reviewed branch, for the reason
+above, and a human merges it: a spec edit is the owner's intent. spec-keeper
+scopes it to the drift the PR introduced; drift already on the base, and
+drift whose direction it cannot establish, stay findings. Claude Code only:
+Gemini CLI has no per-path write rule.
 
 ### 3.4 Implementing from the spec
 
@@ -559,8 +585,9 @@ accident.
   reports every intent and goal as `info` findings for the owner to
   confirm.
 
-**Runs.** As a gate on every PR. In author mode on request, or as a
-follow-up when its own gate failed.
+**Runs.** As a gate on every PR. In author mode on request: locally, or
+on a PR through the `review-gates/update-spec` label (3.3), which proposes
+its edits as a PR into the PR's branch.
 
 **Hands off to** docs-writer and videocast-script-writer when a user-facing
 surface or scenario changed; test-data-generator when it adds scenarios or
