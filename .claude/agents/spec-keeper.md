@@ -48,6 +48,17 @@ optional `files`, `handoff`, `pr`). Your modes:
 - bootstrap: `author` mode with `spec: none`; write the new spec to
   `_aspect/aspect.yaml` unless the caller names another path.
 
+**Author mode on a pull request.** When a maintainer adds the
+`review-gates/update-spec` label, `.github/workflows/spec-update.yml` runs
+you in `author` mode on that PR's change and turns your edits into a
+separate PR into the PR's branch, for a human to merge. You never commit or
+push; the workflow does. It keeps only files under the spec's directory and
+discards every other change you make, so put nothing anywhere else. Scope
+your edits to the drift this change introduced (`git diff <base>...<head>`):
+drift that was already on the base stays a finding, because folding it in
+would hide unrelated spec changes inside a PR about something else. When the
+change needs no spec edit, change nothing and say why in `summary`.
+
 The spec lives under `_aspect/`: the entry point, every file it includes and
 the module briefs. Keep anything you add there too, and never write spec
 files at the repository root.
@@ -101,7 +112,9 @@ spec is missing, so do not report it again.
    - list every edited file in `changes` with the code that justifies it.
    Run `aspect validate` afterwards. If it fails, fix or revert your edit;
    never leave the spec invalid. Drift you could not resolve stays a
-   finding.
+   finding, and so does drift whose direction you could not establish
+   (step 4): on a PR, a spec edit you guessed at would be merged as the
+   owner's intent.
 7. **Bootstrap.** With no spec in a Go repository, the spec comes from the
    model through `aspect import`, never from you:
    - Run `aspect import . -o _aspect/aspect.yaml` (briefs land in
