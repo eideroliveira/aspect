@@ -109,7 +109,9 @@
             "design",
             "test-gap",
             "docs",
-            "data"
+            "data",
+            "readability",
+            "consistency"
           ]
         },
         "title": {

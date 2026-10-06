@@ -29,3 +29,4 @@ coverage.*
 
 # Review gate runs (reports, transcripts, scratch)
 .review/
+mysqldump.sql.gz

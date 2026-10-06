@@ -35,6 +35,26 @@ gates:
             "internal/importer/**", "internal/analyze/**", "go.mod", "go.sum",
             "**/Dockerfile", ".github/**", ".claude/**"]
     mode: gate
+  - agent: security-reviewer
+    paths: ["cmd/**", "internal/**", "go.mod", "go.sum", "**/*.go", "**/*.swift", "**/Dockerfile", ".github/**"]
+    mode: gate
+  - agent: red-team
+    paths: ["cmd/**", "internal/workspace/**", "internal/llm/**", "internal/agents/**",
+            "internal/importer/**", "internal/analyze/**", "go.mod", "go.sum",
+            "**/Dockerfile", ".github/**", ".claude/**"]
+    mode: gate
+  - agent: quality-reviewer
+    paths: ["**/*.go", "**/*.swift", "go.mod", "go.sum"]
+    mode: gate
+  - agent: consistency-reviewer
+    paths: ["**"]
+    mode: advisory
+  - agent: readability-reviewer
+    paths: ["**/*.go", "**/*.swift"]
+    mode: advisory
+  - agent: design-reviewer
+    paths: ["**/*.go", "**/*.swift", "_aspect/**", "internal/**", "cmd/**"]
+    mode: advisory
   - agent: architect
     paths: ["_aspect/**", "aspect.yaml", "**/aspect.yaml", "go.mod", "internal/**", "cmd/**"]
     mode: advisory

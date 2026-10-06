@@ -80,8 +80,8 @@ closed (`additionalProperties: false`), so add no keys of your own.
   different revision is rejected as stale.
 - `severity`: `critical`, `high`, `medium`, `low`, `info` (section 3).
 - `category`: `correctness`, `spec-drift`, `security`, `performance`,
-  `design`, `test-gap`, `docs`, `data`. Pick the one that names the harm,
-  not your own name.
+  `design`, `test-gap`, `docs`, `data`, `readability`, `consistency`. Pick
+  the one that names the harm, not your own name.
 - `location` is required above `info`; `line` is 1-based in the **head**
   version of the file. For a finding about a whole file (a file that is
   missing, a file that should not exist, a file-wide problem), give `file`
