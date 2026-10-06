@@ -30,7 +30,7 @@ const LegacySpec = "aspect.yaml"
 var Severities = []string{"critical", "high", "medium", "low", "info"}
 
 // Categories a finding may carry; they name the harm, not the agent.
-var Categories = []string{"correctness", "spec-drift", "security", "performance", "design", "test-gap", "docs", "data", "readability", "consistency"}
+var Categories = []string{"correctness", "spec-drift", "security", "performance", "design", "test-gap", "docs", "data", "readability", "consistency", "observability", "contract", "i18n"}
 
 // Modes an agent can run in.
 var Modes = []string{"gate", "advisory", "author"}

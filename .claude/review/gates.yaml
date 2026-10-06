@@ -61,6 +61,24 @@ gates:
     when:
       min_changed_lines: 200
       or_touches: ["_aspect/**", "aspect.yaml", "**/aspect.yaml", "go.mod"]
+  - agent: database-reviewer
+    paths: ["**/*.sql", "migrations/**", "models/**", "internal/db/**", "**/db*.go"]
+    mode: gate
+  - agent: test-adequacy-reviewer
+    paths: ["**/*.go", "**/*.swift"]
+    mode: gate
+  - agent: performance-reviewer
+    paths: ["**/*.go", "internal/**", "cmd/**"]
+    mode: advisory
+  - agent: observability-reviewer
+    paths: ["**/*.go", "internal/**", "cmd/**"]
+    mode: advisory
+  - agent: i18n-reviewer
+    paths: ["**/*.go", "modules/i18n/**", "translatejob/**", "**/*.tsv"]
+    mode: gate
+  - agent: api-contract-reviewer
+    paths: ["**/*.go", "cmd/**", "router/**", "checkout/**", "webhook/**"]
+    mode: advisory
 
 thresholds:
   block: [critical, high]

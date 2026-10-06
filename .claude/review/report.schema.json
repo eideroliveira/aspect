@@ -111,7 +111,10 @@
             "docs",
             "data",
             "readability",
-            "consistency"
+            "consistency",
+            "observability",
+            "contract",
+            "i18n"
           ]
         },
         "title": {
