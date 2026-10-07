@@ -59,7 +59,13 @@ For every finding:
 ---
 
 ### Phase 5: Report Output
-Produce a JSON report conforming strictly to `aspect-review/v1`:
+Produce a JSON report conforming strictly to `aspect-review/v1`.
+
+Every finding needs id, severity, category, title, evidence, recommendation and a
+confidence between 0 and 1; a finding above info also needs location. Use no other
+field names. Put what is wrong, with file:line, in `evidence`; how to see it in
+`reproduction`; and the fix or the test to add in `recommendation`.
+
 ```json
 {
   "schema": "aspect-review/v1",
@@ -70,14 +76,16 @@ Produce a JSON report conforming strictly to `aspect-review/v1`:
   "summary": "1-3 sentences evaluating database safety and integrity.",
   "findings": [
     {
+      "id": "database-reviewer/1",
       "severity": "critical|high|medium|low|info",
       "category": "data",
       "title": "Short descriptive title",
-      "location": {
-        "file": "path/to/file.go",
-        "line": 42
-      },
-      "comment": "Concrete explanation of locking/transaction defect and actionable fix."
+      "location": { "file": "path/to/file.go", "line": 42, "end_line": 50 },
+      "spec_ref": "",
+      "evidence": "The locking, transaction or integrity defect at path/to/file.go:42 and the failure it causes under load.",
+      "reproduction": "How to see it, e.g. the query plan, the migration run on a large table, or two concurrent calls.",
+      "recommendation": "The safe change, e.g. an index, a batched backfill or a narrower transaction.",
+      "confidence": 0.9
     }
   ],
   "handoffs": [],

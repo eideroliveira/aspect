@@ -51,7 +51,13 @@ For every finding:
 ---
 
 ### Phase 5: Report Output
-Produce a JSON report conforming strictly to `aspect-review/v1`:
+Produce a JSON report conforming strictly to `aspect-review/v1`.
+
+Every finding needs id, severity, category, title, evidence, recommendation and a
+confidence between 0 and 1; a finding above info also needs location. Use no other
+field names. Put what is wrong, with file:line, in `evidence`; how to see it in
+`reproduction`; and the fix or the test to add in `recommendation`.
+
 ```json
 {
   "schema": "aspect-review/v1",
@@ -62,14 +68,16 @@ Produce a JSON report conforming strictly to `aspect-review/v1`:
   "summary": "1-3 sentences evaluating API backward compatibility, webhook contracts, and serialization stability.",
   "findings": [
     {
+      "id": "api-contract-reviewer/1",
       "severity": "critical|high|medium|low|info",
       "category": "contract",
       "title": "Short descriptive title",
-      "location": {
-        "file": "path/to/dto.go",
-        "line": 45
-      },
-      "comment": "Description of the breaking contract change and backward-compatible solution."
+      "location": { "file": "path/to/dto.go", "line": 45, "end_line": 52 },
+      "spec_ref": "",
+      "evidence": "The breaking contract change at path/to/dto.go:45 and which existing clients or consumers it breaks.",
+      "reproduction": "How to see the break, e.g. a request or payload an old client sends, or a test that decodes it.",
+      "recommendation": "The backward-compatible change, e.g. an additive field or an explicit JSON tag.",
+      "confidence": 0.9
     }
   ],
   "handoffs": [],

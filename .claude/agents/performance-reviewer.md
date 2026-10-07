@@ -50,7 +50,13 @@ For every finding:
 ---
 
 ### Phase 5: Report Output
-Produce a JSON report conforming strictly to `aspect-review/v1`:
+Produce a JSON report conforming strictly to `aspect-review/v1`.
+
+Every finding needs id, severity, category, title, evidence, recommendation and a
+confidence between 0 and 1; a finding above info also needs location. Use no other
+field names. Put what is wrong, with file:line, in `evidence`; how to see it in
+`reproduction`; and the fix or the test to add in `recommendation`.
+
 ```json
 {
   "schema": "aspect-review/v1",
@@ -61,14 +67,16 @@ Produce a JSON report conforming strictly to `aspect-review/v1`:
   "summary": "1-3 sentences evaluating throughput, memory footprint, and timeout safety.",
   "findings": [
     {
+      "id": "performance-reviewer/1",
       "severity": "critical|high|medium|low|info",
       "category": "performance",
       "title": "Short descriptive title",
-      "location": {
-        "file": "path/to/file.go",
-        "line": 105
-      },
-      "comment": "Analysis of resource scaling issue and bounded implementation fix."
+      "location": { "file": "path/to/file.go", "line": 105, "end_line": 112 },
+      "spec_ref": "",
+      "evidence": "The resource-scaling issue at path/to/file.go:105 and how cost grows with input size.",
+      "reproduction": "How to see it, e.g. a benchmark or a request with a large input.",
+      "recommendation": "The bounded implementation, e.g. a limit, a timeout or a streamed read.",
+      "confidence": 0.9
     }
   ],
   "handoffs": [],

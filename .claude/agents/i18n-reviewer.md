@@ -50,7 +50,13 @@ For every finding:
 ---
 
 ### Phase 5: Report Output
-Produce a JSON report conforming strictly to `aspect-review/v1`:
+Produce a JSON report conforming strictly to `aspect-review/v1`.
+
+Every finding needs id, severity, category, title, evidence, recommendation and a
+confidence between 0 and 1; a finding above info also needs location. Use no other
+field names. Put what is wrong, with file:line, in `evidence`; how to see it in
+`reproduction`; and the fix or the test to add in `recommendation`.
+
 ```json
 {
   "schema": "aspect-review/v1",
@@ -61,14 +67,16 @@ Produce a JSON report conforming strictly to `aspect-review/v1`:
   "summary": "1-3 sentences evaluating internationalization, hardcoded strings, and glossary compliance.",
   "findings": [
     {
+      "id": "i18n-reviewer/1",
       "severity": "critical|high|medium|low|info",
       "category": "i18n",
       "title": "Short descriptive title",
-      "location": {
-        "file": "path/to/file.go",
-        "line": 77
-      },
-      "comment": "Description of the unlocalized text or glossary violation with the localized replacement."
+      "location": { "file": "path/to/file.go", "line": 77, "end_line": 80 },
+      "spec_ref": "",
+      "evidence": "The unlocalized reader-facing text or glossary violation at path/to/file.go:77.",
+      "reproduction": "How to see it, e.g. render the page in a non-default locale and look for the untranslated string.",
+      "recommendation": "The translation key to use, or the glossary term that replaces the text.",
+      "confidence": 0.9
     }
   ],
   "handoffs": [],
