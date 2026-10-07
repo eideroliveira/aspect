@@ -170,6 +170,15 @@ jobs:
           block=$(jq -r --arg mode "$MODE" --arg out "$out" --arg files "$FILES" \
             '"base: \(.base)\nhead: \(.head)\nspec: \(.spec)\nmode: \($mode)\nout:  \($out)\nfiles: \($files)"' "$dir/plan.json")
           # A failed or empty run leaves no report; the final job then blocks.
+          # When the agent exits non-zero, its output is the only clue to why
+          # (an expired key, a CLI change, a refused flag), so show its start.
+          show_failure() {
+            echo "::warning::$AGENT exited with $1"
+            echo "::group::$AGENT output (first 4000 bytes)"
+            head -c 4000 "$transcript" 2>/dev/null || true
+            echo
+            echo "::endgroup::"
+          }
           if [ "$PROVIDER" = gemini ]; then
             # Gemini CLI has no Claude Code subagents: the agent's file, minus
             # its frontmatter, becomes the prompt, and the policy file stands
@@ -183,14 +192,14 @@ jobs:
               --approval-mode default \
               --policy .claude/review/gemini-policy.toml \
               --output-format json \
-              > "$transcript" || echo "::warning::$AGENT exited with $?"
+              > "$transcript" || show_failure "$?"
           else
             claude -p "$block" \
               --agent "$AGENT" \
               --permission-mode dontAsk \
               --allowedTools "${ALLOWED_TOOLS//, /,}" \
               --output-format json \
-              > "$transcript" || echo "::warning::$AGENT exited with $?"
+              > "$transcript" || show_failure "$?"
           fi
           ./aspect gate extract -o "$out" "$transcript" || echo "::warning::$AGENT printed no report"
           rm -rf .review/scratch
