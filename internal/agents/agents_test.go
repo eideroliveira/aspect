@@ -170,8 +170,13 @@ func TestValidatorFillsMissingGoalsAsUnverifiable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Goals) != 2 || v.Goals[0].Status != Achieved || v.Goals[1].ID != "G2" || v.Goals[1].Status != Unverifiable {
+	// The run failed, so the model's "achieved" for G1 is capped to partial
+	// by the pipeline, and the goal it forgot is unverifiable.
+	if len(v.Goals) != 2 || v.Goals[0].Status != Partial || len(v.Goals[0].Gaps) != 1 || v.Goals[1].ID != "G2" || v.Goals[1].Status != Unverifiable {
 		t.Fatalf("goals = %+v", v.Goals)
+	}
+	if len(v.Scenarios) != 1 || v.Scenarios[0].Scenario != "S1" || v.Scenarios[0].Covered {
+		t.Fatalf("a scenario without a verdict must be reported uncovered: %+v", v.Scenarios)
 	}
 	if !strings.Contains(f.prompt, "Test run: FAILED") || !strings.Contains(f.prompt, "Entities owned by this module") {
 		t.Error("validator prompt must state the real test outcome and the module's ownership")

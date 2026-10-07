@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/eideroliveira/aspect/internal/llm"
+	"github.com/eideroliveira/aspect/internal/spec"
 	"github.com/eideroliveira/aspect/internal/workspace"
 )
 
@@ -148,8 +149,13 @@ func (v *Validator) Judge(ctx context.Context, in ValidateInput) (Verdict, llm.R
 		status = "FAILED"
 	}
 	fmt.Fprintf(&b, "## Test run: %s (%s)\n\n```\n%s\n```\n\n", status, in.TestResult.Duration.Round(1e6), truncate(in.TestResult.Output, 12000))
-	if len(in.Coverage) > 0 {
-		fmt.Fprintf(&b, "## Tester's coverage claims\n\n```yaml\n%s```\n\n", renderYAML(in.Coverage))
+	scenarioIDs := scenarioIDsOf(in.Module)
+	claims, rejected := checkCoverage(scenarioIDs, in.Coverage, in.Tests)
+	if len(claims) > 0 {
+		fmt.Fprintf(&b, "## Tester's coverage claims\n\nEvery test named here is defined in the test files (checked mechanically); whether it genuinely exercises the scenario is for you to judge.\n\n```yaml\n%s```\n\n", renderYAML(claims))
+	}
+	if len(rejected) > 0 {
+		fmt.Fprintf(&b, "## Coverage claims rejected before judgement\n\nThe Tester claimed these, and the claims do not hold up mechanically:\n\n```yaml\n%s```\n\n", renderYAML(rejected))
 	}
 	if len(in.Concerns) > 0 {
 		fmt.Fprintf(&b, "## Concerns raised by Coder and Tester\n\n```yaml\n%s```\n\n", renderYAML(in.Concerns))
@@ -163,7 +169,35 @@ func (v *Validator) Judge(ctx context.Context, in ValidateInput) (Verdict, llm.R
 	}
 	out.Module = in.Module.Name
 	out.Goals = reconcileGoals(in.GoalIDs, out.Goals)
+	normalizeGoals(out.Goals)
+	if !in.TestResult.OK {
+		capGoals(out.Goals, func(id string) (bool, string) {
+			v := verifyOf(in.Spec, id)
+			if !needsPassingTests(v) {
+				return false, ""
+			}
+			return true, fmt.Sprintf("the test run failed; a goal verified by %s cannot be achieved", v)
+		})
+	}
+	if st, ok := normalizeIntentStatus(string(out.IntentStatus)); !ok {
+		out.IntentRationale = fmt.Sprintf("[aspect] unknown intent status %q read as %s. %s", out.IntentStatus, st, out.IntentRationale)
+		out.IntentStatus = st
+	} else {
+		out.IntentStatus = st
+	}
+	out.Scenarios = reconcileScenarios(scenarioIDs, out.Scenarios)
+	for _, r := range rejected {
+		out.Recommendations = append(out.Recommendations, "[aspect] coverage "+r)
+	}
 	return out, resp, nil
+}
+
+func scenarioIDsOf(m *spec.Module) []string {
+	ids := make([]string, 0, len(m.Scenarios))
+	for _, s := range m.Scenarios {
+		ids = append(ids, s.ID)
+	}
+	return ids
 }
 
 // reconcileGoals guarantees one verdict per accountable goal: goals the model

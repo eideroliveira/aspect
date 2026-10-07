@@ -5,15 +5,14 @@
 package agents
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/eideroliveira/aspect/internal/lang"
-	"github.com/eideroliveira/aspect/internal/llm"
 	"github.com/eideroliveira/aspect/internal/spec"
 	"github.com/eideroliveira/aspect/internal/workspace"
 )
@@ -51,18 +50,6 @@ func renderYAML(v any) string {
 		return fmt.Sprintf("<render error: %v>", err)
 	}
 	return string(b)
-}
-
-func renderFiles(title string, files []workspace.File) string {
-	if len(files) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "## %s\n\n", title)
-	for _, f := range files {
-		fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n", f.Path, strings.TrimRight(f.Content, "\n"))
-	}
-	return b.String()
 }
 
 // renderContext is the system-level context every agent needs: intent,
@@ -239,62 +226,89 @@ func renderModule(t Task, heading string) string {
 	return b.String()
 }
 
-// complete requests a JSON answer matching schema and decodes it into out.
-//
-// Structured outputs compile the schema into a grammar on the server, and
-// large schemas (a spec fragment with nested entities, surfaces and
-// scenarios) can exceed its size limit. When the API says so, the request
-// is retried without the grammar: the schema goes into the prompt as text
-// and the answer is parsed leniently instead of being guaranteed.
-func complete(ctx context.Context, c llm.Client, system, prompt string, schema map[string]any, out any) (llm.Response, error) {
-	resp, err := c.Complete(ctx, llm.Request{System: system, Prompt: prompt, Schema: schema})
-	if err != nil && schema != nil && IsGrammarTooLarge(err) {
-		resp, err = c.Complete(ctx, llm.Request{System: system, Prompt: prompt + schemaHint(schema)})
-	}
-	if err != nil {
-		return resp, err
-	}
-	text := stripFence(resp.Text)
-	if err := decodeLenient([]byte(text), out); err != nil {
-		return resp, err
-	}
-	return resp, nil
-}
-
-// IsGrammarTooLarge reports the API refusal of a structured-output schema
-// whose compiled grammar exceeds the server's limit.
-func IsGrammarTooLarge(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "compiled grammar is too large")
-}
-
-// schemaHint renders the schema as an instruction the model can follow
-// without server-side enforcement.
-func schemaHint(schema map[string]any) string {
-	b, err := json.Marshal(schema)
-	if err != nil {
-		return ""
-	}
-	return "\n\nAnswer with a single JSON document and nothing else: no prose, no code fence. It must conform to this JSON schema exactly (every listed property present, no others):\n\n" + string(b) + "\n"
-}
-
-// stripFence tolerates a model that wraps JSON in a markdown code fence even
-// though structured outputs should make that impossible.
-func stripFence(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if i := strings.Index(s, "\n"); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
-	}
-	return strings.TrimSpace(s)
-}
-
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if len(s) <= n || n < 16 {
 		return s
 	}
-	return s[:n] + "\n…(truncated)"
+	// Failing output puts the verdict at the end (FAIL lines, the last
+	// panic), while the start says what was being compiled or run, so the
+	// tail gets most of the budget and both ends are kept.
+	head := s[:n/3]
+	tail := s[len(s)-(n-n/3):]
+	for len(head) > 0 && !utf8.ValidString(head) {
+		head = head[:len(head)-1]
+	}
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return fmt.Sprintf("%s\n…(%d bytes omitted)…\n%s", head, len(s)-len(head)-len(tail), tail)
+}
+
+// sectionBudget bounds one rendered group of files. A module with many or
+// large dependencies must not silently overflow the context; what is left
+// out is named so the model knows its view is partial.
+const sectionBudget = 300000
+
+// renderFiles renders a titled group of files within sectionBudget, dropping
+// the largest files first so the most files survive, and listing what it
+// omitted.
+func renderFiles(title string, files []workspace.File) string {
+	return renderFilesWithin(title, files, sectionBudget)
+}
+
+func renderFilesWithin(title string, files []workspace.File, budget int) string {
+	if len(files) == 0 {
+		return ""
+	}
+	show, omitted := fitFiles(files, budget)
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s\n\n", title)
+	for _, f := range show {
+		fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n", f.Path, strings.TrimRight(f.Content, "\n"))
+	}
+	if len(omitted) > 0 {
+		size := 0
+		var paths []string
+		for _, f := range omitted {
+			size += len(f.Content)
+			paths = append(paths, f.Path)
+		}
+		fmt.Fprintf(&b, "### Omitted to fit the prompt budget\n\n%d files (%d bytes) are not shown. Their identifiers may still be referenced by the files above:\n%s\n\n", len(omitted), size, "- "+strings.Join(paths, "\n- "))
+	}
+	return b.String()
+}
+
+// fitFiles splits files into the ones that fit the budget, in their original
+// order, and the ones that do not, largest first.
+func fitFiles(files []workspace.File, budget int) (show, omitted []workspace.File) {
+	total := 0
+	for _, f := range files {
+		total += len(f.Content)
+	}
+	if total <= budget {
+		return files, nil
+	}
+	idx := make([]int, len(files))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return len(files[idx[a]].Content) > len(files[idx[b]].Content) })
+	drop := map[int]bool{}
+	for _, i := range idx {
+		if total <= budget {
+			break
+		}
+		drop[i] = true
+		total -= len(files[i].Content)
+	}
+	for i, f := range files {
+		if drop[i] {
+			omitted = append(omitted, f)
+		} else {
+			show = append(show, f)
+		}
+	}
+	return show, omitted
 }
 
 // filesSchema is the JSON schema fragment for a list of files.

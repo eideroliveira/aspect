@@ -97,7 +97,9 @@ func (t *Tester) Generate(ctx context.Context, in TestInput) (TestOutput, llm.Re
 	if err != nil {
 		return out, resp, fmt.Errorf("tester: %w", err)
 	}
-	out.Files = in.Lang.KeepModuleFiles(in.Module.Name, out.Files, true)
+	kept, dropped := in.Lang.SplitModuleFiles(in.Module.Name, out.Files, true)
+	out.Concerns = append(out.Concerns, droppedConcerns("Tester", dropped)...)
+	out.Files = kept
 	if len(out.Files) == 0 {
 		return out, resp, fmt.Errorf("tester: returned no test files inside %s", in.Lang.TestDir(in.Module.Name))
 	}
