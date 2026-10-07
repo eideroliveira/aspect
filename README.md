@@ -168,53 +168,70 @@ of the code, not the owner's statement of it.
 
 ## Review gates
 
-Aspect also ships Claude Code subagents that keep reviewing a product after
-the first build. Copy `.claude/agents/`, `.claude/review/` and
-`.claude/commands/` into a repository and install `aspect`:
+Aspect ships a comprehensive, multi-agent review system designed to continuously review and gate changes after the initial build. Copy `.claude/agents/`, `.claude/review/` and `.claude/commands/` into a repository and install `aspect`:
 
-| Agent | Mode | What it does |
+### Agent Personas
+
+Aspect provides specialized review personas configured with grounded checklists, anti-hallucination guardrails, and reachability proofs:
+
+| Agent | Default Mode | What it does |
 |---|---|---|
-| `spec-keeper` | gate, author | keeps the Aspect spec in lockstep with the code; blocks drift, writes the spec edits |
-| `adversarial-reviewer` | gate | tries to break the change: correctness, edge cases, concurrency, performance |
-| `security-red-team` | gate | attacks the change: every finding has an exploit path |
+| **`spec-keeper`** | gate, author | Keeps the Aspect spec in lockstep with the code; blocks drift, writes spec updates. |
+| **`adversarial-reviewer`** | gate | Edge cases, race conditions, nil dereferences, concurrent deadlocks, data corruption. |
+| **`security-reviewer`** | gate | AppSec auditing: OWASP Top 10, injection, auth/authz bypass, path traversal. |
+| **`red-team`** | gate | Attacker mindset: weaponizable chains, state desynchronization, permission boundaries. |
+| **`security-red-team`** | gate | System-level security, secrets, Dockerfile, dependency boundaries, CI integrity. |
+| **`database-reviewer`** | gate | Schema migrations, dangerous locks (`CONCURRENTLY`), multi-step writes outside `tx`, N+1 queries. |
+| **`test-adequacy-reviewer`** | gate | Missing regression tests for bug fixes, unexercised error branches, hollow/assertion-less mocks. |
+| **`quality-reviewer`** | gate | Idiomatic code patterns, error wrapping (`%w`), resource cleanup (`defer`), goroutine leaks. |
+| **`i18n-reviewer`** | gate | Hardcoded user-facing copy, translation catalogs, brand glossary compliance, translation pipeline integrity. |
+| **`consistency-reviewer`** | advisory | Pattern uniformity, style coherence, architectural conventions across packages. |
+| **`readability-reviewer`** | advisory | Cognitive complexity, deep nesting, naming clarity, self-documenting code. |
+| **`design-reviewer`** | advisory | API contracts, single responsibility, leaky abstractions, tight coupling. |
+| **`architect`** | advisory | Structural contracts, module decoupling, migration safety, cross-package boundaries. |
+| **`performance-reviewer`** | advisory | Unbounded buffer reads (`io.ReadAll` without `LimitReader`), zero-timeout HTTP clients, slice retention leaks. |
+| **`observability-reviewer`** | advisory | Production debuggability, PII/secret logging prevention, swallowed errors, trace context. |
+| **`api-contract-reviewer`** | advisory | Breaking JSON tags (`json:"..."`), webhook idempotency/ACKs, backward-compatibility breaks. |
+| **`docs-writer`** | author | Drafts and updates documentation, briefs, and API guides based on spec changes. |
+| **`test-data-generator`** | author | Generates realistic, edge-case test fixtures and synthetic data. |
+| **`videocast-script-writer`** | author | Generates changelog walkthrough scripts for video updates. |
 
-The agents read the repository's spec from `_aspect/aspect.yaml`, with its
-includes and briefs beside it in `_aspect/` (a root `aspect.yaml` still
-works). A repository without one gets a first draft from `spec-keeper` in
-author mode.
+The agents read the repository's spec from `_aspect/aspect.yaml`, with its includes and briefs beside it in `_aspect/` (a root `aspect.yaml` still works). A repository without one gets a first draft from `spec-keeper` in author mode.
 
-Each agent writes a JSON report (`.claude/review/report.schema.json`);
-`aspect gate` decides the outcome from the reports and
-`.claude/review/gates.yaml`, so no agent grades its own work:
+Each agent outputs a structured JSON report conforming to the `aspect-review/v1` schema (`.claude/review/report.schema.json`). Findings carry severities (`critical`, `high`, `medium`, `low`, `info`) and categories (`correctness`, `spec-drift`, `security`, `performance`, `design`, `test-gap`, `docs`, `data`, `readability`, `consistency`, `observability`, `contract`, `i18n`).
+
+### Execution & Gating Pipeline
+
+`aspect gate` calculates the plan, evaluates reports, and enforces thresholds defined in `.claude/review/gates.yaml`:
 
 ```sh
-aspect gate plan -base origin/main -o .review/run/plan.json  # which agents apply
-aspect gate check  .review/run                               # exit 1 when a gate blocks
-aspect gate render .review/run                               # the PR comment
+aspect gate plan -base origin/main -o .review/run/plan.json  # determine which agents apply
+aspect gate check  .review/run                               # exits non-zero if a gate blocks
+aspect gate render .review/run                               # formats the markdown PR review comment
+aspect gate extract -o .review/run/<agent>.json <transcript>  # extracts verbatim JSON report
 ```
 
-`/review` runs the same sequence locally, and
-`.github/workflows/review-gates.yml` runs it on every pull request. It needs
-an `ANTHROPIC_API_KEY` secret (agents run in Claude Code) or a
-`GEMINI_API_KEY` secret (agents run in Gemini CLI, limited by
-`.claude/review/gemini-policy.toml`); with both, set the repository variable
-`REVIEW_GATES_PROVIDER=gemini` to prefer Gemini. The design is in
-[docs/design.md](docs/design.md).
+### Review Engines & Providers
 
-When the spec keeper finds drift, the `review-gates/update-spec` label on
-the PR runs it in author mode (`.github/workflows/spec-update.yml`, Claude
-Code only): its edits to `_aspect/` come back as a PR into the PR's branch,
-for a human to merge.
+Aspect review gates can be executed via three environments:
 
-`/implement [spec ref]` closes the loop from the other side: the main
-Claude Code session builds what the spec states and the code lacks, with a
-test per operation contract, invariant and scenario, then runs `/review`
-and fixes blocking findings until `aspect gate check` passes or a finding
-needs a human. It commits on a branch and never pushes.
+1. **Local LLM Engine (`aspect-code-reviewer` / `aspect-review`):**
+   Runs completely locally on Apple Silicon / Metal via Ollama using `qwen2.5-coder:32b` with **zero Anthropic API calls**:
+   - As an MCP server in **Claude Desktop** (exposing `review_with_aspect_gates` and `run_single_aspect_agent`).
+   - Via CLI: `aspect-review gates --repo . --base origin/main [--publish]`.
+   - As automated merge guards: `pre-merge-commit` git hook or `tools/gate-pr.sh`.
+2. **Claude Code (Interactive CLI):**
+   Runs interactively inside Claude Code via the `/review` command or `.claude/review/run.sh`.
+3. **Gemini CLI / Headless CI:**
+   Runs headlessly via `.claude/review/gemini-policy.toml` or CI workflow (`REVIEW_GATES_PROVIDER=gemini`).
+
+When the spec keeper finds drift, the `review-gates/update-spec` label on the PR runs it in author mode (`.github/workflows/spec-update.yml`): its edits to `_aspect/` come back as a PR into the PR's branch, for a human to merge.
+
+`/implement [spec ref]` closes the loop from the other side: the main Claude Code session builds what the spec states and the code lacks, with a test per operation contract, invariant and scenario, then runs `/review` and fixes blocking findings until `aspect gate check` passes.
 
 ## Status
 
-Early. What exists today:
+Active development. What exists today:
 
 - Spec format v1 with stack, database and interface sections; a validator
   that reports every problem at once (identifiers, references, dependency
@@ -236,6 +253,9 @@ Early. What exists today:
   different languages, each in its own workspace), cloud_service.
 - `aspect inventory` and `aspect import`: recover a spec from a Go codebase,
   optionally split into tiers and re-expressed for Swift/iOS.
+- Multi-agent review gate engine with 15+ specialized gate and advisory personas.
+- Local LLM review integration (Ollama / Qwen 2.5 Coder 32B) via Model Context Protocol (MCP) and CLI with zero API billing.
+- Expanded review categories: readability, consistency, observability, contract, i18n.
 - Tests run offline against fake clients, including end-to-end pipeline
   tests that exercise a real repair round through the Go toolchain and a
   real build through the Swift toolchain.
