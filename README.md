@@ -85,7 +85,14 @@ effect passes through one path-guarded boundary. When tests fail, the Coder
 receives the failing output and repairs the implementation; the tests stay
 fixed because they are the spec's executable form. If the Coder believes a
 test contradicts the spec, it says so in `concerns` and the report surfaces
-it rather than silently bending the code to the test.
+it rather than silently bending the code to the test. On a repair round the
+Coder returns only the files it changed plus an explicit `removed` list, sees a
+summary of the earlier rounds, and the loop stops early when a repair leaves
+the failure unchanged. Every agent call retries transient failures, re-asks
+once when an answer is truncated or does not decode, and the Validator's
+rules that can be checked mechanically (a failed run achieves nothing,
+coverage claims must name real tests) are enforced in Go, not only in the
+prompt.
 
 ## Install and run
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -343,6 +344,8 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 	// 3. Run, and repair the implementation while it fails. Disallowed
 	// imports count as a failed run without spending a build.
 	var result workspace.Result
+	var attempts []agents.RepairAttempt
+	var lastOutput string
 	for attempt := 0; ; attempt++ {
 		mr.Iterations = attempt + 1
 		if vs := checkImports(profile, code.Files, allowed); len(vs) > 0 {
@@ -357,16 +360,30 @@ func (r *Runner) runModule(ctx context.Context, s *spec.Spec, tier *spec.Tier, p
 		if result.OK || attempt >= r.Opts.MaxRepairs {
 			break
 		}
+		if attempt > 0 {
+			attempts[len(attempts)-1].Output = result.Output
+			// A repair that leaves the failure exactly as it was has not
+			// engaged with it; the remaining rounds would most likely be
+			// spent the same way.
+			if sameFailure(lastOutput, result.Output) {
+				r.logf("   %s: repair %d left the failure unchanged; stopping early", step.Module, attempt)
+				mr.Concerns = append(mr.Concerns, fmt.Sprintf("[aspect] repair %d left the failing output unchanged; the remaining %d repair rounds were skipped", attempt, r.Opts.MaxRepairs-attempt))
+				break
+			}
+		}
+		lastOutput = result.Output
 		r.logf("   %s: coder repairing (%d of %d)", step.Module, attempt+1, r.Opts.MaxRepairs)
 		previous := code.Files
 		code, resp, err = r.Coder.Generate(ctx, agents.CodeInput{
 			Task: task, Dependencies: deps,
 			Existing: previous, Tests: tests.Files, Feedback: result.Output,
+			Attempts: attempts,
 		})
 		mr.Usage.Add(resp)
 		if err != nil {
 			return fail(err)
 		}
+		attempts = append(attempts, agents.RepairAttempt{Changed: changed(previous, code.Files)})
 		// A repair that renames a file must not leave the old one behind.
 		if err := ws.DeleteFiles(removed(previous, code.Files)); err != nil {
 			return fail(err)
@@ -428,6 +445,36 @@ func dependencyFiles(ws *workspace.Workspace, p *lang.Profile, deps []string) ([
 		}
 	}
 	return out, nil
+}
+
+// changed lists the files a repair touched: new paths, rewritten content,
+// and removed paths.
+func changed(before, after []workspace.File) []string {
+	prev := map[string]string{}
+	for _, f := range before {
+		prev[f.Path] = f.Content
+	}
+	var out []string
+	for _, f := range after {
+		if c, ok := prev[f.Path]; !ok || c != f.Content {
+			out = append(out, f.Path)
+		}
+	}
+	for _, p := range removed(before, after) {
+		out = append(out, p+" (removed)")
+	}
+	return out
+}
+
+// volatile matches the parts of a test run that change between identical
+// failures: durations, addresses, goroutine ids, temp paths.
+var volatile = regexp.MustCompile(`\(\d+(\.\d+)?m?s\)|\b\d+(\.\d+)?m?s\b|0x[0-9a-fA-F]+|goroutine \d+|/tmp/[^\s:]+|/var/folders/[^\s:]+`)
+
+// sameFailure reports whether two failing outputs are the same failure once
+// the volatile parts are ignored.
+func sameFailure(a, b string) bool {
+	norm := func(s string) string { return strings.TrimSpace(volatile.ReplaceAllString(s, "")) }
+	return norm(a) == norm(b)
 }
 
 func removed(before, after []workspace.File) []string {

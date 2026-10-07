@@ -474,3 +474,65 @@ func TestRunGeneratesIndependentModulesInParallel(t *testing.T) {
 		t.Fatalf("expected overlapping model calls, max concurrent = %d", fake.maxSeen)
 	}
 }
+
+func TestRunStopsRepairingWhenTheFailureDoesNotChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("invokes the go toolchain")
+	}
+	s, err := spec.Parse([]byte(counterSpec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := plan.Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buggy := agents.CodeOutput{Files: []workspace.File{{Path: "counter/counter.go",
+		Content: "package counter\n\ntype Counter struct{ n int }\n\nfunc (c *Counter) Inc() int { return c.n }\n"}}, Notes: "first try", Concerns: []string{}}
+	tests := agents.TestOutput{Files: []workspace.File{{Path: "counter/counter_test.go",
+		Content: "package counter\n\nimport \"testing\"\n\nfunc TestInc_S1(t *testing.T) {\n\tvar c Counter\n\tc.Inc()\n\tif got := c.Inc(); got != 2 {\n\t\tt.Fatalf(\"got %d\", got)\n\t}\n}\n"}},
+		Coverage: []agents.ScenarioCoverage{{Scenario: "S1", Tests: []string{"TestInc_S1"}}}, Concerns: []string{}}
+	verdict := agents.Verdict{Module: "counter", Goals: []agents.GoalVerdict{{ID: "G1", Status: agents.Achieved, Evidence: "optimistic", Gaps: []string{}, Confidence: 0.9}},
+		IntentStatus: agents.Aligned, IntentRationale: "r", Scenarios: []agents.ScenarioVerdict{}, Recommendations: []string{}}
+
+	// The repair answers with the very same code, so the second run fails
+	// the same way and the third repair round is never requested.
+	fake := &scriptedLLM{answers: []string{mustJSON(t, buggy), mustJSON(t, tests), mustJSON(t, buggy), mustJSON(t, verdict), mustJSON(t, systemVerdict("G1", agents.Partial))}}
+	rep, err := New(fake, Options{OutDir: t.TempDir(), MaxRepairs: 3, Model: "fake"}).Run(context.Background(), s, p)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(fake.answers) != 0 {
+		t.Fatalf("%d scripted answers unused", len(fake.answers))
+	}
+	m := rep.Modules[0]
+	if m.TestsOK || m.Iterations != 2 || m.Usage.Calls != 4 {
+		t.Fatalf("tests_ok=%v iterations=%d calls=%d", m.TestsOK, m.Iterations, m.Usage.Calls)
+	}
+	if !strings.Contains(strings.Join(m.Concerns, "\n"), "left the failing output unchanged") {
+		t.Fatalf("concerns = %v", m.Concerns)
+	}
+	// The Validator said achieved; the pipeline knows the tests failed.
+	if g := rep.Goals[0]; g.ByModule["counter"] != agents.Partial {
+		t.Fatalf("goal = %+v", g)
+	}
+}
+
+func TestSameFailureIgnoresVolatileOutput(t *testing.T) {
+	a := "--- FAIL: TestInc_S1 (0.00s)\n    counter_test.go:9: got 0\nFAIL\nFAIL\texample.com/counter\t0.312s\ngoroutine 7 [running]: 0xc000012345"
+	b := "--- FAIL: TestInc_S1 (0.01s)\n    counter_test.go:9: got 0\nFAIL\nFAIL\texample.com/counter\t0.298s\ngoroutine 19 [running]: 0xc0000abcde"
+	if !sameFailure(a, b) {
+		t.Fatal("timings, goroutine ids and addresses must not count as a change")
+	}
+	if sameFailure(a, strings.Replace(b, "got 0", "got 1", 1)) {
+		t.Fatal("a different assertion message is a different failure")
+	}
+	before := []workspace.File{{Path: "a.go", Content: "1"}, {Path: "b.go", Content: "2"}}
+	after := []workspace.File{{Path: "a.go", Content: "1"}, {Path: "b.go", Content: "3"}, {Path: "c.go", Content: "4"}}
+	if got := changed(before, after); strings.Join(got, ",") != "b.go,c.go" {
+		t.Fatalf("changed = %v", got)
+	}
+	if got := changed(before, before[:1]); strings.Join(got, ",") != "b.go (removed)" {
+		t.Fatalf("changed = %v", got)
+	}
+}

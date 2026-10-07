@@ -166,7 +166,48 @@ func (v *SystemValidator) Judge(ctx context.Context, in SystemInput) (SystemVerd
 		ids = append(ids, g.ID)
 	}
 	out.Goals = reconcileGoals(ids, out.Goals)
+	normalizeGoals(out.Goals)
+	capGoals(out.Goals, func(id string) (bool, string) {
+		v := verifyOf(s, id)
+		for _, m := range in.Modules {
+			mod := s.Module(m.Module)
+			if mod == nil || !contains(mod.Goals, id) {
+				continue
+			}
+			if m.Error != "" {
+				return true, fmt.Sprintf("module %s failed to build; a goal it is accountable for is at best partial", m.Module)
+			}
+			if !m.TestsOK && needsPassingTests(v) {
+				return true, fmt.Sprintf("module %s's tests failed; a goal verified by %s cannot be achieved", m.Module, v)
+			}
+		}
+		return false, ""
+	})
+	if st, ok := normalizeIntentStatus(string(out.IntentStatus)); !ok {
+		out.IntentRationale = fmt.Sprintf("[aspect] unknown intent status %q read as %s. %s", out.IntentStatus, st, out.IntentRationale)
+		out.IntentStatus = st
+	} else {
+		out.IntentStatus = st
+	}
+	for i := range out.Integration {
+		f := &out.Integration[i]
+		if st, ok := normalizeGoalStatus(string(f.Status)); !ok {
+			f.Note = fmt.Sprintf("[aspect] unknown status %q read as %s. %s", f.Status, st, f.Note)
+			f.Status = st
+		} else {
+			f.Status = st
+		}
+	}
 	return out, resp, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // selectCode returns the modules whose implementation is shown. Modules

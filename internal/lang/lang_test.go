@@ -22,16 +22,54 @@ func TestNames(t *testing.T) {
 func TestKeepModuleFilesSwift(t *testing.T) {
 	p, _ := For("swift")
 	files := []workspace.File{
-		{Path: "Sources/Stock/A.swift"},
-		{Path: "./Sources/Stock/B.swift"},
-		{Path: "Sources/Ledger/L.swift"},
-		{Path: "Tests/StockTests/T.swift"},
-		{Path: "Sources/Stock/README.md"},
+		{Path: "Sources/Stock/A.swift", Content: "a"},
+		{Path: "./Sources/Stock/B.swift", Content: "b"},
+		{Path: "Sources/Ledger/L.swift", Content: "l"},
+		{Path: "Tests/StockTests/T.swift", Content: "t"},
+		{Path: "Sources/Stock/README.md", Content: "r"},
 	}
 	code := p.KeepModuleFiles("stock", files, false)
 	tests := p.KeepModuleFiles("stock", files, true)
 	if len(code) != 2 || code[1].Path != "Sources/Stock/B.swift" || len(tests) != 1 {
 		t.Fatalf("code=%v tests=%v", code, tests)
+	}
+}
+
+func TestSplitModuleFilesRefusesEscapesDuplicatesAndEmptyFiles(t *testing.T) {
+	p, _ := For("go")
+	files := []workspace.File{
+		{Path: "stock/stock.go", Content: "package stock"},
+		{Path: "stock/../ledger/ledger.go", Content: "package ledger"},
+		{Path: "stock/./sub/../model.go", Content: "package stock"},
+		{Path: "/stock/abs.go", Content: "package stock"},
+		{Path: "stock/stock.go", Content: "package stock // again"},
+		{Path: "stock/empty.go", Content: "  \n"},
+		{Path: "stock/stock_test.go", Content: "package stock"},
+		{Path: "", Content: "x"},
+		{Path: "../outside/stock/x.go", Content: "package stock"},
+	}
+	kept, dropped := p.SplitModuleFiles("stock", files, false)
+	if len(kept) != 2 || kept[0].Path != "stock/stock.go" || kept[1].Path != "stock/model.go" {
+		t.Fatalf("kept = %+v", kept)
+	}
+	if kept[0].Content != "package stock" {
+		t.Fatalf("the first copy of a repeated path must win, got %q", kept[0].Content)
+	}
+	if len(dropped) != 7 {
+		t.Fatalf("dropped = %+v", dropped)
+	}
+	reasons := map[string]string{}
+	for _, d := range dropped {
+		reasons[d.Path] = d.Reason
+	}
+	if !strings.Contains(reasons["stock/../ledger/ledger.go"], "outside the module") {
+		t.Errorf("traversal into a sibling module: %q", reasons["stock/../ledger/ledger.go"])
+	}
+	if !strings.Contains(reasons["../outside/stock/x.go"], "leaves the module") {
+		t.Errorf("climb above the root: %q", reasons["../outside/stock/x.go"])
+	}
+	if !strings.Contains(reasons["stock/stock.go"], "repeated") || !strings.Contains(reasons["stock/empty.go"], "no content") {
+		t.Errorf("reasons = %v", reasons)
 	}
 }
 
