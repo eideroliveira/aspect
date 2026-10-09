@@ -249,7 +249,9 @@ type Relation struct {
 // Interface is one way the system is exposed to users or other systems.
 type Interface struct {
 	Name string `yaml:"name" json:"name"`
-	// Kind is http, web, cli, grpc or app (native screens).
+	// Kind is http, web, cli, grpc, app (native screens), job (background
+	// jobs a queue or scheduler runs) or mcp (tools and resources an AI
+	// client calls).
 	Kind   string `yaml:"kind" json:"kind"`
 	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
 	// Provider is the tier that serves this interface, or "external" when a
@@ -272,11 +274,16 @@ type Interface struct {
 type Surface struct {
 	Name   string `yaml:"name" json:"name"`
 	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
-	// Route is the path (http, web), command name (cli), RPC name (grpc) or
-	// navigation path (app).
+	// Route is the path (http, web), command line (cli), RPC name (grpc),
+	// navigation path (app), registered job name (job) or tool or resource
+	// name (mcp).
 	Route string `yaml:"route" json:"route"`
 	// Method is the HTTP method for http surfaces.
 	Method string `yaml:"method,omitempty" json:"method,omitempty"`
+	// Event names a page event a web surface handles (a QOR5 web event,
+	// an htmx or form action) rather than a page of its own; Route is then
+	// the page that dispatches it.
+	Event string `yaml:"event,omitempty" json:"event,omitempty"`
 	// Entity the surface operates on, when it is a CRUD surface.
 	Entity string `yaml:"entity,omitempty" json:"entity,omitempty"`
 	// Operations for entity-bound surfaces: list, create, read, update, delete

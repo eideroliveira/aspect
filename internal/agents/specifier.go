@@ -46,7 +46,7 @@ Write intent as the reason the package exists, in the owner's words, not a parap
 
 Entities: only structs that are persisted (marked [persistent], or clearly stored). Field types are notation, not Go: string, int, int64, float, bool, time, decimal, uuid, bytes, json (a list or structured value stored as JSON; say its shape in the field's intent), or another entity's name. Never uint, slices, maps or a non-persisted struct's name. Mark the primary key, required and unique fields, and relations you can see from foreign keys or slices of other entities.
 
-Interfaces: group routes into named interfaces using these canonical names: "api" for JSON or form endpoints called by programs, "web" for server-rendered pages for end users, "admin" for back-office pages, "cli" for commands, "grpc" for RPC services. Each route becomes a surface with a short snake_case name, its route and method, the entity it operates on when obvious (with operations only for such CRUD surfaces: list, create, read, update, delete or a lowercase custom verb, never the handler's name), and the errors you can infer.
+Interfaces: group routes into named interfaces using these canonical names: "api" for JSON or form endpoints called by programs, "web" for server-rendered pages for end users, "admin" for back-office pages, "cli" for commands, "grpc" for RPC services, "jobs" (kind job) for background jobs a queue or scheduler runs, "mcp" (kind mcp) for tools and resources an AI assistant calls. Each route becomes a surface with a short snake_case name, its route and method, the entity it operates on when obvious (with operations only for such CRUD surfaces: list, create, read, update, delete or a lowercase custom verb, never the handler's name), and the errors you can infer. A route is always real: an http or web route is the path the code registers, with any prefix resolved; a page event (a QOR5 web event, a form action) is a web surface with "event" set and the page that dispatches it as route; a job's route is its registered name; an mcp route is the tool or resource name; middleware takes the path pattern it wraps (/*). A function other packages call in-process is an operation, never a surface.
 
 Operations: the package's exported API that other packages call, as language-neutral signatures: Name(arg: type, ...) -> result | error. Include pre and post conditions when the code makes them evident.
 
@@ -76,10 +76,10 @@ func fragmentSchema() map[string]any {
 		"name": str, "intent": str, "fields": arr(field), "relations": arr(relation), "constraints": stringList(),
 	})
 	surface := obj([]string{"name", "route"}, map[string]any{
-		"name": str, "intent": str, "route": str, "method": str, "entity": str, "operations": stringList(), "request": str, "response": str, "errors": stringList(), "auth": str,
+		"name": str, "intent": str, "route": str, "method": str, "event": str, "entity": str, "operations": stringList(), "request": str, "response": str, "errors": stringList(), "auth": str,
 	})
 	iface := obj([]string{"name", "kind", "intent", "surfaces"}, map[string]any{
-		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
+		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app", "job", "mcp"}}, "intent": str, "framework": str, "auth": str,
 		"surfaces": arr(surface),
 	})
 	operation := obj([]string{"name", "signature"}, map[string]any{
@@ -150,7 +150,7 @@ Goals: consolidate the packages' proposed goals into 5 to 15 system goals a prod
 
 Stack: describe the frameworks the codebase actually uses in a way a Coder could follow: name, import path (module), purpose, and concrete guidance on how they are used in this codebase. Include the ORM when there is one.
 
-Interfaces: one entry per interface name used by the fragments (api, web, admin, cli, grpc), with kind, intent, the framework it is built on (must be one of the stack frameworks, or empty), and auth. Do not list surfaces; they are merged from the fragments.
+Interfaces: one entry per interface name used by the fragments (api, web, admin, cli, grpc, jobs, mcp), with kind, intent, the framework it is built on (must be one of the stack frameworks, or empty), and auth. Do not list surfaces; they are merged from the fragments.
 
 Leave database and modules empty: they are assembled from the fragments.
 
@@ -206,7 +206,7 @@ func synthesisSchema(mode Mode) map[string]any {
 	frag := fragmentSchema()["properties"].(map[string]any)
 	surface := frag["interfaces"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["surfaces"].(map[string]any)
 	iface := obj([]string{"name", "kind", "intent", "provider", "surfaces"}, map[string]any{
-		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app"}}, "intent": str, "framework": str, "auth": str,
+		"name": str, "kind": map[string]any{"type": "string", "enum": []string{"http", "web", "cli", "grpc", "app", "job", "mcp"}}, "intent": str, "framework": str, "auth": str,
 		"provider": str, "service": str, "surfaces": surface,
 	})
 	entity := frag["entities"].(map[string]any)["items"].(map[string]any)

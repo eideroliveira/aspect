@@ -301,7 +301,10 @@ names stay unique across the system database and every tier database.
 ## 8. Interfaces
 
 An interface is one way the system is exposed to people or programs. Its
-surfaces are the individual endpoints, pages, commands, RPCs or screens.
+surfaces are the individual endpoints, pages, page events, commands, RPCs,
+screens, background jobs or AI tools: things something outside a module can
+reach. A function other packages call in-process is not a surface; it is an
+operation in its module's `interface`.
 
 ```yaml
 interfaces:
@@ -328,6 +331,24 @@ interfaces:
         route: /admin/products
         entity: Product
         operations: [list, create, update, delete]
+      - name: restock                 # a page event, dispatched on its page
+        route: /admin/products
+        event: restockProduct
+        entity: Product
+        operations: [restock]
+      - {name: require_staff, route: /admin/*}   # middleware: the pattern it wraps
+  - name: jobs
+    kind: job
+    intent: Work the queue runs on its own.
+    provider: backend
+    surfaces:
+      - {name: nightly_count, route: Nightly Stock Count}   # the registered job name
+  - name: assistant
+    kind: mcp
+    intent: Tools the support assistant calls.
+    provider: backend
+    surfaces:
+      - {name: stock_level, route: get_stock_level}         # the tool name
   - name: push
     kind: http
     intent: Notifications.
@@ -340,7 +361,7 @@ interfaces:
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | identifier | yes | Unique interface name |
-| `kind` | `http` \| `web` \| `cli` \| `grpc` \| `app` | yes | `http`: endpoints called by programs; `web`: server-rendered pages; `cli`: commands; `grpc`: RPC services; `app`: native screens |
+| `kind` | `http` \| `web` \| `cli` \| `grpc` \| `app` \| `job` \| `mcp` | yes | `http`: endpoints called by programs; `web`: server-rendered pages and their events; `cli`: commands; `grpc`: RPC services; `app`: native screens; `job`: background jobs a queue or scheduler runs; `mcp`: tools and resources an AI client calls |
 | `intent` | text | yes | Who it serves and why |
 | `provider` | tier name or `external` | multi-tier: yes | The tier that serves it; `external` for a service outside the spec. Empty in a single-tier spec means the tier itself |
 | `service` | string | with `external` | Name of the hosted provider (Supabase, Firebase, an existing API) |
@@ -354,8 +375,9 @@ Surface fields:
 |---|---|---|
 | `name` | identifier, unique within the interface | all |
 | `intent` | what the surface is for | |
-| `route` | path (`http`, `web`), command (`cli`), RPC name (`grpc`), navigation path (`app`) | `http`, `web`, `grpc`, `app` |
+| `route` | path starting with `/` (`http`, `web`; middleware takes the pattern it wraps, `/*`), command line (`cli`), RPC name (`grpc`), navigation path (`app`), registered job name (`job`), tool or resource name (`mcp`) | `http`, `web`, `grpc`, `app`, `job`, `mcp` |
 | `method` | HTTP method | `http` |
+| `event` | name of a page event the surface handles (a QOR5 web event, a form action); `route` is the page that dispatches it | only on `web` |
 | `entity` | entity the surface operates on, when it is a CRUD surface | |
 | `operations` | `list`, `create`, `read`, `update`, `delete` or a lowercase custom verb (`close`, `rearm`), for entity-bound surfaces; never the handler's name | |
 | `request`, `response` | shapes, free text | |
@@ -575,7 +597,7 @@ Database
 - Every entity of a generated database is owned by exactly one module, in the database's tier. Entities of an external database are owned by nobody.
 
 Interfaces
-- `kind` is one of the listed kinds; `http` surfaces have `route` and `method`; `web`, `grpc` and `app` surfaces have `route`; every interface has at least one surface; surface entities exist; `framework` is declared in the providing tier's stack.
+- `kind` is one of the listed kinds; `http` surfaces have `route` and `method`; `web`, `grpc`, `app`, `job` and `mcp` surfaces have `route`; only `web` surfaces have an `event`; every interface has at least one surface; surface entities exist; `framework` is declared in the providing tier's stack.
 - Multi-tier: `provider` is a tier name or `external`. Single-tier: it may only be empty or `external`.
 - Every provided surface is implemented by exactly one module of the providing tier. External surfaces are never implemented.
 - `consumes` never names a surface of the module's own tier.
@@ -600,6 +622,7 @@ Topology
 - A `brief` that was not loaded (spec parsed from memory) or is empty. A brief path that is absolute or escapes the spec's directory is an error.
 - A dependency that was not loaded (spec parsed from memory).
 - `operations` listed on a surface with no `entity`; an operation that is not a lowercase verb (a function name such as `ExportCSVHandler`).
+- An `http` or `web` route that is not a path (`event:Save`, `tool:x`, `(in-process)`).
 - An entity field type that is neither neutral nor an entity (`uint`, `time.Time`, `[string]`).
 - A declared `monolith` with several tiers or with external providers.
 
@@ -803,7 +826,7 @@ system:
         constraints: [text]                             #opt
   interfaces:                                           #opt
     - name: identifier
-      kind: http | web | cli | grpc | app
+      kind: http | web | cli | grpc | app | job | mcp
       intent: text
       provider: tier-name | external                    # multi-tier, or external
       service: string                                   # with external
