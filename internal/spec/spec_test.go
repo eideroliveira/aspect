@@ -465,3 +465,71 @@ modules:
 		t.Fatalf("want path escape error, got:\n%s", text)
 	}
 }
+
+func TestValidateFieldTypesAndOperationVerbs(t *testing.T) {
+	src := `
+aspect: 1
+system:
+  name: shop
+  intent: sell
+  language: go
+  module_path: example.com/shop
+  goals: [{id: G1, statement: sells, verify: test}]
+  database:
+    engine: sqlite
+    entities:
+      - name: Category
+        intent: groups products
+        fields: [{name: ID, type: int64, key: primary}]
+      - name: Product
+        intent: what we sell
+        fields:
+          - {name: ID, type: int64, key: primary}
+          - {name: Tags, type: json, intent: list of strings}
+          - {name: Category, type: Category}
+          - {name: Price, type: decimal}
+          - {name: OwnerID, type: uint}
+          - {name: Labels, type: "[string]"}
+          - {name: At, type: time.Time}
+  interfaces:
+    - name: admin
+      kind: web
+      intent: back office
+      surfaces:
+        - {name: products, route: /admin/products, entity: Product, operations: [list, update, close]}
+        - {name: export, route: /admin/export, entity: Product, operations: [ExportCSVHandler, Checker.Fix]}
+modules:
+  - name: catalog
+    intent: owns products
+    goals: [G1]
+    entities: [Category, Product]
+    surfaces: [admin.products, admin.export]
+    scenarios: [{id: S1, when: list, then: products}]
+`
+	s, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := Validate(s)
+	if issues.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", join(issues))
+	}
+	got := map[string]bool{}
+	for _, i := range issues {
+		got[i.Path] = true
+	}
+	for _, want := range []string{
+		"system.database.entities[1].fields[4].type", // uint
+		"system.database.entities[1].fields[5].type", // [string]
+		"system.database.entities[1].fields[6].type", // time.Time
+		"system.interfaces[0].surfaces[1].operations[0]",
+		"system.interfaces[0].surfaces[1].operations[1]",
+	} {
+		if !got[want] {
+			t.Errorf("missing warning at %s in:\n%s", want, join(issues))
+		}
+	}
+	if len(issues) != 5 {
+		t.Errorf("neutral types, json, entity names and verbs (custom ones included) must pass; got:\n%s", join(issues))
+	}
+}

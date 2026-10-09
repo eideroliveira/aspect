@@ -68,7 +68,7 @@ system:
       - name: Product
         intent: A sellable item identified by its SKU.
         fields:
-          - {name: ID, type: uint, key: primary}
+          - {name: ID, type: int64, key: primary}
           - {name: SKU, type: string, required: true, unique: true}
           - {name: Name, type: string, required: true}
           - {name: OnHand, type: int, default: "0", intent: units physically on the shelf}
@@ -80,12 +80,12 @@ system:
       - name: Movement
         intent: One change of a product's stock, kept forever as the audit trail.
         fields:
-          - {name: ID, type: uint, key: primary}
-          - {name: ProductID, type: uint, required: true}
+          - {name: ID, type: int64, key: primary}
+          - {name: ProductID, type: int64, required: true}
           - {name: Qty, type: int, required: true, intent: signed change to OnHand or Reserved}
           - {name: Kind, type: string, required: true, intent: "receipt, reserve, release or ship"}
           - {name: Order, type: string, intent: "order reference for reserve, release and ship"}
-          - {name: At, type: time.Time, required: true}
+          - {name: At, type: time, required: true}
         relations:
           - {kind: belongs_to, entity: Product, via: ProductID}
         constraints:
