@@ -224,8 +224,9 @@ type Entity struct {
 // Field is one attribute of an entity.
 type Field struct {
 	Name string `yaml:"name" json:"name"`
-	// Type is expressed in the target language's terms (Go: string, int64,
-	// time.Time, decimal). Agents map it to the database column type.
+	// Type is neutral (string, int, int64, float, bool, time, decimal, uuid,
+	// bytes, json) or the name of an entity. Agents map it to the target
+	// language and the database column type.
 	Type string `yaml:"type" json:"type"`
 	// Key is "primary" for the primary key, empty otherwise.
 	Key      string `yaml:"key,omitempty" json:"key,omitempty"`

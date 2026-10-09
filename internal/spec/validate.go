@@ -66,7 +66,10 @@ var (
 	migrationModes = []string{"auto", "files"}
 	relationKinds  = []string{"has_one", "has_many", "belongs_to", "many_to_many"}
 	interfaceKinds = []string{"http", "web", "cli", "grpc", "app"}
-	topologies     = []Topology{Monolith, APIBackend, CloudService}
+	// fieldTypes are the neutral entity field types; a field may also name
+	// an entity. Agents map them to each language and database engine.
+	fieldTypes = []string{"string", "int", "int64", "float", "bool", "time", "decimal", "uuid", "bytes", "json"}
+	topologies = []Topology{Monolith, APIBackend, CloudService}
 )
 
 type collector struct {
@@ -404,6 +407,8 @@ func validateDatabase(c *collector, x *ctx, p string, db *Database, owner string
 			fields[f.Name] = true
 			if f.Type == "" {
 				c.add(Error, fp+".type", "is required")
+			} else if !oneOf(f.Type, fieldTypes) && x.s.Entity(f.Type) == nil {
+				c.add(Warning, fp+".type", "%q is neither a neutral type (%s) nor an entity; another language or database cannot map it (lists and structured values are json)", f.Type, strings.Join(fieldTypes, ", "))
 			}
 			switch f.Key {
 			case "":
@@ -509,6 +514,11 @@ func validateInterfaces(c *collector, x *ctx) {
 			}
 			if len(sf.Operations) > 0 && sf.Entity == "" {
 				c.add(Warning, sp+".operations", "operations are listed but no entity is named")
+			}
+			for k, op := range sf.Operations {
+				if !identRe.MatchString(op) {
+					c.add(Warning, fmt.Sprintf("%s.operations[%d]", sp, k), "%q is not a verb: use list, create, read, update, delete or a lowercase custom verb such as close, not the function that implements it", op)
+				}
 			}
 		}
 	}

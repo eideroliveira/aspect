@@ -112,8 +112,13 @@ writes it.
 ### Field types
 
 Entity field types use neutral names: `string`, `int`, `int64`, `float`,
-`bool`, `time`, `decimal`, `uuid`, `bytes`, or the name of another entity.
-The Coder maps them to the language and the database engine.
+`bool`, `time`, `decimal`, `uuid`, `bytes`, `json`, or the name of another
+entity. `json` is a list or structured value stored as one JSON column; say
+its shape in the field's `intent` (`list of objections`, `{page, box}`).
+The Coder maps them to the language and the database engine, so a
+language's own types (`uint`, `time.Time`, `[]string`, a struct that is not
+an entity) are warnings: they do not survive a retarget to another
+language.
 
 ### Contract clauses
 
@@ -352,7 +357,7 @@ Surface fields:
 | `route` | path (`http`, `web`), command (`cli`), RPC name (`grpc`), navigation path (`app`) | `http`, `web`, `grpc`, `app` |
 | `method` | HTTP method | `http` |
 | `entity` | entity the surface operates on, when it is a CRUD surface | |
-| `operations` | `list`, `create`, `read`, `update`, `delete` or a custom verb, for entity-bound surfaces | |
+| `operations` | `list`, `create`, `read`, `update`, `delete` or a lowercase custom verb (`close`, `rearm`), for entity-bound surfaces; never the handler's name | |
 | `request`, `response` | shapes, free text | |
 | `errors` | error cases with their status or meaning | |
 | `auth` | override of the interface's auth | |
@@ -594,7 +599,8 @@ Topology
 - `system.language`, `module_path` or `stack` set alongside `tiers`; a `tier` field on a tier-local database; a single tier written under `tiers`.
 - A `brief` that was not loaded (spec parsed from memory) or is empty. A brief path that is absolute or escapes the spec's directory is an error.
 - A dependency that was not loaded (spec parsed from memory).
-- `operations` listed on a surface with no `entity`.
+- `operations` listed on a surface with no `entity`; an operation that is not a lowercase verb (a function name such as `ExportCSVHandler`).
+- An entity field type that is neither neutral nor an entity (`uint`, `time.Time`, `[string]`).
 - A declared `monolith` with several tiers or with external providers.
 
 ---

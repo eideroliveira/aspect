@@ -44,9 +44,9 @@ You receive the inventory of one package: its doc comment, exported types (with 
 
 Write intent as the reason the package exists, in the owner's words, not a paraphrase of its API. Propose goals that a user of the system would recognise as outcomes, each with how it can be verified: "test" for behaviour a scenario can demonstrate, "invariant" for a property that must always hold, "review" for qualities no test can execute.
 
-Entities: only structs that are persisted (marked [persistent], or clearly stored). Field types are notation, not Go: string, int, int64, float, bool, time, decimal, uuid, or another entity's name. Mark the primary key, required and unique fields, and relations you can see from foreign keys or slices of other entities.
+Entities: only structs that are persisted (marked [persistent], or clearly stored). Field types are notation, not Go: string, int, int64, float, bool, time, decimal, uuid, bytes, json (a list or structured value stored as JSON; say its shape in the field's intent), or another entity's name. Never uint, slices, maps or a non-persisted struct's name. Mark the primary key, required and unique fields, and relations you can see from foreign keys or slices of other entities.
 
-Interfaces: group routes into named interfaces using these canonical names: "api" for JSON or form endpoints called by programs, "web" for server-rendered pages for end users, "admin" for back-office pages, "cli" for commands, "grpc" for RPC services. Each route becomes a surface with a short snake_case name, its route and method, the entity it operates on when obvious, and the errors you can infer.
+Interfaces: group routes into named interfaces using these canonical names: "api" for JSON or form endpoints called by programs, "web" for server-rendered pages for end users, "admin" for back-office pages, "cli" for commands, "grpc" for RPC services. Each route becomes a surface with a short snake_case name, its route and method, the entity it operates on when obvious (with operations only for such CRUD surfaces: list, create, read, update, delete or a lowercase custom verb, never the handler's name), and the errors you can infer.
 
 Operations: the package's exported API that other packages call, as language-neutral signatures: Name(arg: type, ...) -> result | error. Include pre and post conditions when the code makes them evident.
 
