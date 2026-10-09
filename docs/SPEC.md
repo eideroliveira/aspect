@@ -666,6 +666,42 @@ assembled document, which is what the loader validates, so unknown keys
 in fragments are still caught. See
 [examples/modular_shop](https://github.com/eideroliveira/aspect/blob/main/examples/modular_shop/aspect.yaml).
 
+### One file per module: `aspect split`
+
+A spec that grew in one file (an imported one, typically) can be split
+mechanically, so a change to one package touches one small file and a
+review reads only that file:
+
+```sh
+aspect split _aspect/aspect.yaml -n   # list the files and their sizes, write nothing
+aspect split _aspect/aspect.yaml      # write them
+aspect import . -split                # or import straight into this layout
+```
+
+```
+_aspect/
+  aspect.yaml              system, goals, constraints, stack, database settings
+  interfaces/<name>.yaml   one interface with its surfaces
+  entities/<module>.yaml   the entities that module owns (_unowned.yaml: no owner)
+  modules/<name>.yaml      one module
+  tiers/<tier>/modules/, tiers/<tier>/entities/   the same, per tier
+  briefs/                  unchanged; fragments point at them with ../briefs/
+```
+
+The entry point pulls each directory in with `- dir:`, so a new module is a
+new file and nothing else. Comments and key order are kept. Modules,
+interfaces and entities come back sorted by file name, which changes
+nothing: build order comes from `depends_on`. Before writing, `split` loads
+its own result and compares it with the original; it refuses a spec that
+already uses includes, names that cannot be file names (or differ only in
+case), and a target directory that already holds YAML.
+
+Validation issues name the file and line they come from, through includes:
+
+```
+_aspect/modules/cart.yaml:41: error: modules[12].scenarios[3].goals[0]: unknown goal "G9"
+```
+
 ## 16. System dependencies
 
 A system may consume interfaces of other Aspect systems. They are declared

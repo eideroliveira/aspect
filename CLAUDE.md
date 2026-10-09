@@ -6,7 +6,7 @@ whether the result achieves the spec's stated goals. Go module
 
 ## Layout
 
-- `internal/spec` — spec format (YAML), loader (includes via `file`/`dir` on the node tree, briefs, dependencies), semantic validator. Pure Go, no LLM. Single-tier specs are an implicit tier (`EffectiveTiers`); never branch on the spec's shape elsewhere.
+- `internal/spec` — spec format (YAML), loader (includes via `file`/`dir` on the node tree, briefs, dependencies), splitter (the inverse, one file per module), semantic validator; issues carry the file:line they come from. Pure Go, no LLM. Single-tier specs are an implicit tier (`EffectiveTiers`); never branch on the spec's shape elsewhere.
 - `internal/plan` — deterministic build order from the module dependency graph.
 - `internal/lang` — language profiles (go, swift): layout, manifest, toolchain steps, import guard, prompt rules. Agents and pipeline never branch on language.
 - `internal/llm` — the only package that calls the Anthropic API. Agents use the `llm.Client` interface.
@@ -17,7 +17,7 @@ whether the result achieves the spec's stated goals. Go module
 - `internal/workspace` — writes proposed files (path-guarded) and runs the profile's toolchain steps.
 - `internal/pipeline` — orchestration and the report.
 - `internal/gate` — review gates: which agents apply to a diff, report validation, pass/warn/block, PR comment. Pure Go, no model, no git.
-- `cmd/aspect` — CLI: `validate`, `expand`, `plan`, `run`, `drift`, `inventory`, `import`, `gate`.
+- `cmd/aspect` — CLI: `validate`, `expand`, `split`, `plan`, `run`, `drift`, `inventory`, `import`, `gate`.
 - `.claude/agents`, `.claude/review`, `.claude/commands` — the review agents, their shared protocol, report schema and `gates.yaml`, and the `/review` and `/implement` commands. See `docs/design.md`.
 - `examples/` — reference specs; CI validates them.
 - `docs/` — architecture and spec format.

@@ -23,9 +23,16 @@ type Issue struct {
 	Severity Severity
 	Path     string
 	Message  string
+	// Location is the file and line Path was written at
+	// (`modules/orders.yaml:12`), when the spec was loaded from disk and
+	// the path names a node.
+	Location string
 }
 
 func (i Issue) String() string {
+	if i.Location != "" {
+		return fmt.Sprintf("%s: %s: %s: %s", i.Location, i.Severity, i.Path, i.Message)
+	}
 	return fmt.Sprintf("%s: %s: %s", i.Severity, i.Path, i.Message)
 }
 
@@ -121,6 +128,9 @@ func Validate(s *Spec) Issues {
 	validateTopology(c, x)
 	validateBriefs(c, s)
 	validateDependencies(c, s)
+	for i := range c.issues {
+		c.issues[i].Location = s.Sources.Locate(c.issues[i].Path)
+	}
 	return c.issues
 }
 
