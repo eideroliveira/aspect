@@ -26,14 +26,22 @@ import (
 // written in; they are rebased when a fragment is included.
 var pathKeys = map[string]bool{"brief": true, "spec": true}
 
-// expandIncludes rewrites node in place. rootDir is the root spec's
-// directory (brief paths are rebased against it); dir is the directory of
-// the file node came from; visited guards against include cycles.
-func expandIncludes(node *yaml.Node, rootDir, dir string, visited map[string]bool) error {
+// expander carries the state of one expansion. rootDir is the root spec's
+// directory (brief paths are rebased against it); visited guards against
+// include cycles; files records the file every node was parsed from.
+type expander struct {
+	rootDir string
+	visited map[string]bool
+	files   map[*yaml.Node]string
+}
+
+// expandIncludes rewrites node in place. dir is the directory of the file
+// node came from.
+func (e *expander) expandIncludes(node *yaml.Node, dir string) error {
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, c := range node.Content {
-			if err := expandIncludes(c, rootDir, dir, visited); err != nil {
+			if err := e.expandIncludes(c, dir); err != nil {
 				return err
 			}
 		}
@@ -41,7 +49,7 @@ func expandIncludes(node *yaml.Node, rootDir, dir string, visited map[string]boo
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			val := node.Content[i+1]
 			if kind, path := includeRef(val); kind == "file" {
-				loaded, err := loadFragment(path, rootDir, dir, visited)
+				loaded, err := e.loadFragment(path, dir)
 				if err != nil {
 					return err
 				}
@@ -53,7 +61,7 @@ func expandIncludes(node *yaml.Node, rootDir, dir string, visited map[string]boo
 			} else if kind == "dir" {
 				return fmt.Errorf("%s: `dir` includes are only valid inside lists", path)
 			}
-			if err := expandIncludes(val, rootDir, dir, visited); err != nil {
+			if err := e.expandIncludes(val, dir); err != nil {
 				return err
 			}
 		}
@@ -63,12 +71,12 @@ func expandIncludes(node *yaml.Node, rootDir, dir string, visited map[string]boo
 			kind, path := includeRef(item)
 			switch kind {
 			case "":
-				if err := expandIncludes(item, rootDir, dir, visited); err != nil {
+				if err := e.expandIncludes(item, dir); err != nil {
 					return err
 				}
 				out = append(out, item)
 			case "file":
-				loaded, err := loadFragment(path, rootDir, dir, visited)
+				loaded, err := e.loadFragment(path, dir)
 				if err != nil {
 					return err
 				}
@@ -80,7 +88,7 @@ func expandIncludes(node *yaml.Node, rootDir, dir string, visited map[string]boo
 				}
 				for _, f := range files {
 					// fragmentFiles returns paths already joined with dir.
-					loaded, err := loadFragment(f, rootDir, "", visited)
+					loaded, err := e.loadFragment(f, "")
 					if err != nil {
 						return err
 					}
@@ -140,7 +148,7 @@ func fragmentFiles(dir string) ([]string, error) {
 
 // loadFragment parses an included file, expands its own includes relative
 // to its directory, and rebases its path-valued keys to the root spec.
-func loadFragment(path, rootDir, dir string, visited map[string]bool) (*yaml.Node, error) {
+func (e *expander) loadFragment(path, dir string) (*yaml.Node, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(dir, path)
 	}
@@ -148,11 +156,11 @@ func loadFragment(path, rootDir, dir string, visited map[string]bool) (*yaml.Nod
 	if err != nil {
 		return nil, err
 	}
-	if visited[abs] {
+	if e.visited[abs] {
 		return nil, fmt.Errorf("include cycle at %s", path)
 	}
-	visited[abs] = true
-	defer delete(visited, abs)
+	e.visited[abs] = true
+	defer delete(e.visited, abs)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -166,10 +174,11 @@ func loadFragment(path, rootDir, dir string, visited map[string]bool) (*yaml.Nod
 		return nil, fmt.Errorf("include %s: empty file", path)
 	}
 	fragDir := filepath.Dir(path)
-	if err := expandIncludes(&doc, rootDir, fragDir, visited); err != nil {
+	if err := e.expandIncludes(&doc, fragDir); err != nil {
 		return nil, err
 	}
-	rel, err := filepath.Rel(rootDir, fragDir)
+	e.record(&doc, path)
+	rel, err := filepath.Rel(e.rootDir, fragDir)
 	if err != nil {
 		rel = fragDir
 	}
@@ -197,24 +206,63 @@ func rebasePaths(n *yaml.Node, rel string) {
 	}
 }
 
-// Expand reads a spec file and returns its YAML with every include
-// resolved, as `Load` sees it. Useful for debugging a split spec.
-func Expand(path string) ([]byte, error) {
+// record marks every node under n that no nested include claimed as
+// coming from file. Nested fragments are recorded first, so the walk stops
+// at their roots.
+func (e *expander) record(n *yaml.Node, file string) {
+	if _, done := e.files[n]; done {
+		return
+	}
+	e.files[n] = file
+	for _, c := range n.Content {
+		e.record(c, file)
+	}
+}
+
+// Sources maps the nodes of an expanded spec back to the files they were
+// written in, so an issue path like `modules[3].scenarios[1]` can be shown
+// as `modules/orders.yaml:12`.
+type Sources struct {
+	root  *yaml.Node
+	files map[*yaml.Node]string
+}
+
+// expandFile reads a spec file and resolves every include. It returns the
+// document node (nil for an empty file) and where each node came from.
+func expandFile(path string) (*yaml.Node, *Sources, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse spec: %w", err)
+		return nil, nil, fmt.Errorf("parse spec: %w", err)
 	}
 	dir := filepath.Dir(path)
 	abs, _ := filepath.Abs(path)
-	if err := expandIncludes(&doc, dir, dir, map[string]bool{abs: true}); err != nil {
-		return nil, err
+	e := &expander{rootDir: dir, visited: map[string]bool{abs: true}, files: map[*yaml.Node]string{}}
+	if err := e.expandIncludes(&doc, dir); err != nil {
+		return nil, nil, err
 	}
 	if len(doc.Content) == 0 {
-		return []byte{}, nil
+		return nil, nil, nil
 	}
-	return yaml.Marshal(doc.Content[0])
+	e.record(&doc, path)
+	return doc.Content[0], &Sources{root: doc.Content[0], files: e.files}, nil
+}
+
+// Expand reads a spec file and returns its YAML with every include
+// resolved, as `Load` sees it. Useful for debugging a split spec.
+func Expand(path string) ([]byte, error) {
+	b, _, err := expand(path)
+	return b, err
+}
+
+func expand(path string) ([]byte, *Sources, error) {
+	root, src, err := expandFile(path)
+	if err != nil || root == nil {
+		return []byte{}, nil, err
+	}
+	b, err := yaml.Marshal(root)
+	return b, src, err
 }

@@ -37,7 +37,9 @@ A spec is a YAML document with three layers:
 | **Database** | engine, migration policy, test database, entities with fields and relations | modules that own entities |
 | **Interfaces** | http, web, cli or grpc surfaces bound to entities and a framework | modules that implement surfaces |
 
-A spec can be **split across files** with `file` and `dir` includes, and
+A spec can be **split across files** with `file` and `dir` includes
+(`aspect split` turns a single file into one file per module and interface,
+and validation issues name the file and line), and
 can **depend on other Aspect systems**: `system.dependencies` names their
 specs, and modules consume their surfaces as `identity/api.login` with the
 contract checked against the other system's real spec. See
@@ -101,6 +103,7 @@ go install github.com/eideroliveira/aspect/cmd/aspect@latest
 
 aspect validate examples/inventory/aspect.yaml   # every issue in one pass
 aspect expand   examples/modular_shop/aspect.yaml # a split spec, assembled
+aspect split    _aspect/aspect.yaml -n           # one file per module, interface and entity owner
 aspect plan     examples/inventory/aspect.yaml   # build order and per-step work
 aspect run      examples/inventory/aspect.yaml -out ./out
 ```

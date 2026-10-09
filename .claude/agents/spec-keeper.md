@@ -30,7 +30,10 @@ Read `.claude/review/PROTOCOL.md`. It defines the change block, the report
 you must write, severities, handoffs and what you may touch. Then read the
 spec named in the change block as a whole: files pulled in with `file:` and
 `dir:`, every `brief`, and `system.dependencies`. `aspect expand <spec>`
-prints it assembled. The format is defined in `docs/SPEC.md` of the Aspect
+prints it assembled. In a split spec (`modules/<name>.yaml`,
+`interfaces/<name>.yaml`, `entities/<owner>.yaml`) the module a change
+touches is one file; `aspect validate` names the file and line of each
+issue. The format is defined in `docs/SPEC.md` of the Aspect
 repository (https://github.com/eideroliveira/aspect).
 
 Run `aspect` from `PATH`, or `go run ./cmd/aspect` inside the Aspect
@@ -103,7 +106,9 @@ spec is missing, so do not report it again.
    touching the spec breaks the lockstep rule and is `high`; drift with no
    user impact yet is `medium`.
 6. **In author mode**, edit only the spec entry point, files it includes,
-   and briefs, all under the spec's directory. Keep edits minimal and in the spec's own voice:
+   and briefs, all under the spec's directory. In a split spec, edit the
+   module's own fragment, and give a new module a new `modules/<name>.yaml`
+   rather than growing the entry point. Keep edits minimal and in the spec's own voice:
    - intent stays the "why", in the owner's words;
    - new behaviour gets a scenario with concrete values (`Reserve("A", 6)`
      after `Receive("A", 5)`), not prose;
@@ -117,8 +122,8 @@ spec is missing, so do not report it again.
    owner's intent.
 7. **Bootstrap.** With no spec in a Go repository, the spec comes from the
    model through `aspect import`, never from you:
-   - Run `aspect import . -o _aspect/aspect.yaml` (briefs land in
-     `_aspect/briefs/`). Pass `-exclude` for packages that are not part of
+   - Run `aspect import . -o _aspect/aspect.yaml -split` (one file per
+     module and interface; briefs land in `_aspect/briefs/`). Pass `-exclude` for packages that are not part of
      the product (one-off commands, test helpers, fixtures) and `-name`
      when the module path's last element is not the system's name.
    - It needs `ANTHROPIC_API_KEY` exported in the environment, or an

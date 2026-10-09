@@ -28,6 +28,7 @@ const usage = `aspect - build software from a formal specification with a team o
 Usage:
   aspect validate <spec.yaml>          check the spec and report every issue
   aspect expand   <spec.yaml>          print the spec with every include resolved
+  aspect split    <spec.yaml> [-n]     break a single-file spec into one file per module and interface
   aspect plan     <spec.yaml>          show the module build order and what each step needs
   aspect run      <spec.yaml> [flags]  generate code and tests, run them, validate goals
   aspect drift    <spec.yaml> [flags]  re-validate existing code against the spec without regenerating
@@ -37,6 +38,9 @@ Usage:
   aspect gate check <run-dir> [flags]  validate the agents' reports; exit 1 when the gates block
   aspect gate render <run-dir> [flags] the review result as a Markdown PR comment
   aspect gate extract -o FILE [input]  save the report an agent printed (claude -p output)
+
+Split flags:
+  -n                list the files split would write, and their sizes, without writing
 
 Run flags:
   -out DIR          output directory (default ./out)
@@ -61,6 +65,7 @@ Inventory and import flags:
 
 Import flags:
   -o FILE           where to write the spec (default _aspect/aspect.yaml; briefs go beside it)
+  -split            write one file per module, interface and entity owner (see aspect split)
   -language LANG    language of the new system, or of its frontend tier (default: source)
   -topology T       monolith | api_backend | cloud_service
                     monolith:      one tier connecting to its own database (default when
@@ -105,6 +110,8 @@ func main() {
 		if err == nil {
 			os.Stdout.Write(b)
 		}
+	case "split":
+		err = runSplit(path, os.Args[3:])
 	case "plan":
 		err = runPlan(path)
 	case "run":
@@ -157,6 +164,56 @@ func runValidate(path string) error {
 	}
 	fmt.Printf("ok: %s (%s, %s, %d modules, %d goals%s, %d warnings)\n", s.System.Name, s.EffectiveTopology(), strings.Join(langs, "+"), len(s.AllModules()), len(s.System.Goals), deps, len(issues))
 	return nil
+}
+
+func runSplit(path string, args []string) error {
+	fs := flag.NewFlagSet("split", flag.ContinueOnError)
+	dryRun := fs.Bool("n", false, "list the files without writing them")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	l, err := splitFile(path, *dryRun)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	for _, p := range l.Paths() {
+		fmt.Printf("%6d lines  %s\n", lineCount(l.Files[p]), filepath.Join(dir, filepath.FromSlash(p)))
+	}
+	verb := "split"
+	if *dryRun {
+		verb = "would split"
+	}
+	fmt.Printf("%s %s (%d lines) into %d files; the entry point keeps %d lines\n", verb, path, lineCount(before), len(l.Files), lineCount(l.Files[l.Root]))
+	return nil
+}
+
+// splitFile splits the single-file spec at path in place.
+func splitFile(path string, dryRun bool) (*spec.Layout, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	l, err := spec.Split(data, filepath.Base(path))
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(path)
+	if err := l.CheckTarget(dir); err != nil {
+		return nil, err
+	}
+	if dryRun {
+		return l, nil
+	}
+	return l, l.Write(dir)
+}
+
+func lineCount(b []byte) int {
+	return strings.Count(string(b), "\n")
 }
 
 func runPlan(path string) error {
@@ -362,6 +419,7 @@ func runImport(dir string, args []string) error {
 	model := fs.String("model", envOr("ASPECT_MODEL", llm.DefaultModel), "model id")
 	effort := fs.String("effort", "high", "effort level")
 	fallbacks := fs.Bool("fallbacks", true, "server-side refusal fallbacks")
+	split := fs.Bool("split", false, "one file per module, interface and entity owner")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -396,15 +454,27 @@ func runImport(dir string, args []string) error {
 	if len(res.Briefs) > 0 {
 		fmt.Fprintf(os.Stderr, "wrote %d brief(s) under %s\n", len(res.Briefs), filepath.Join(filepath.Dir(*out), "briefs"))
 	}
+	issues := res.Issues
+	if *split {
+		l, err := splitFile(*out, false)
+		if err != nil {
+			return fmt.Errorf("%s was written as one file; split failed: %w", *out, err)
+		}
+		fmt.Fprintf(os.Stderr, "split %s into %d files under %s\n", *out, len(l.Files), strings.Join(l.Dirs(), ", "))
+		// Validate the split spec so issues point at fragment files.
+		if s, err := spec.Load(*out); err == nil {
+			issues = spec.Validate(s)
+		}
+	}
 	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
-	for _, i := range res.Issues {
+	for _, i := range issues {
 		fmt.Fprintln(os.Stderr, i)
 	}
 	fmt.Printf("wrote %s: %s (%s, %d tier(s), %d modules, %d goals, %d entities, %d interfaces)\n", *out, res.Spec.System.Name, res.Spec.EffectiveTopology(),
 		len(res.Spec.EffectiveTiers()), len(res.Spec.AllModules()), len(res.Spec.System.Goals), entityCount(res.Spec), len(res.Spec.System.Interfaces))
-	if res.Issues.HasErrors() {
+	if issues.HasErrors() {
 		return fmt.Errorf("the recovered spec has validation errors; fix them in %s and run `aspect validate`", *out)
 	}
 	return nil

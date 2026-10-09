@@ -50,6 +50,9 @@ type Spec struct {
 	Path string `yaml:"-" json:"-"`
 	// Deps holds the loaded specs of System.Dependencies, by name.
 	Deps map[string]*Spec `yaml:"-" json:"-"`
+	// Sources maps the loaded YAML back to the files it was written in;
+	// nil for specs parsed from memory. See Locate.
+	Sources *Sources `yaml:"-" json:"-"`
 }
 
 // Dependency is another Aspect system this one consumes interfaces of. It
@@ -346,7 +349,7 @@ func load(path string, loading map[string]bool) (*Spec, error) {
 	loading[abs] = true
 	defer delete(loading, abs)
 
-	data, err := Expand(path)
+	data, src, err := expand(path)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +359,7 @@ func load(path string, loading map[string]bool) (*Spec, error) {
 	}
 	s.Dir = filepath.Dir(path)
 	s.Path = path
+	s.Sources = src
 	if err := s.LoadBriefs(); err != nil {
 		return nil, err
 	}
