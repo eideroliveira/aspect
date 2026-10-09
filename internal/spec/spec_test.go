@@ -533,3 +533,63 @@ modules:
 		t.Errorf("neutral types, json, entity names and verbs (custom ones included) must pass; got:\n%s", join(issues))
 	}
 }
+
+func TestValidateInterfaceKindsEventsAndRoutes(t *testing.T) {
+	src := `
+aspect: 1
+system:
+  name: shop
+  intent: sell
+  language: go
+  module_path: example.com/shop
+  goals: [{id: G1, statement: sells, verify: test}]
+  interfaces:
+    - name: web
+      kind: web
+      intent: pages
+      surfaces:
+        - {name: cart, route: /cart, method: GET}
+        - {name: update_cart, route: /cart, method: POST, event: UpdateCartQuantity}
+        - {name: security_headers, route: /*}
+        - {name: send_chat, route: "event:SendChatEvent"}
+    - name: jobs
+      kind: job
+      intent: background work
+      surfaces:
+        - {name: renew, route: Process Next Billing}
+        - {name: nightly, route: Nightly, event: Tick}
+    - name: mcp
+      kind: mcp
+      intent: tools the assistant calls
+      surfaces:
+        - {name: get_cart, route: get_cart}
+        - {name: no_route}
+modules:
+  - name: shop
+    intent: sells
+    goals: [G1]
+    surfaces: [web.cart, web.update_cart, web.security_headers, web.send_chat, jobs.renew, jobs.nightly, mcp.get_cart, mcp.no_route]
+    scenarios: [{id: S1, when: buy, then: sold}]
+`
+	s, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Severity{}
+	for _, i := range Validate(s) {
+		got[i.Path] = i.Severity
+	}
+	want := map[string]Severity{
+		"system.interfaces[0].surfaces[3].route": Warning, // event:SendChatEvent is not a path
+		"system.interfaces[1].surfaces[1].event": Error,   // events belong to web surfaces
+		"system.interfaces[2].surfaces[1].route": Error,   // mcp surfaces need their tool name
+	}
+	for p, sev := range want {
+		if got[p] != sev {
+			t.Errorf("%s: want %s, got %q", p, sev, got[p])
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("job and mcp kinds, a web event on its page and middleware on /* must pass; got %v", got)
+	}
+}

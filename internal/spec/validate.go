@@ -65,7 +65,7 @@ var (
 	dbEngines      = []string{"postgres", "mysql", "sqlite"}
 	migrationModes = []string{"auto", "files"}
 	relationKinds  = []string{"has_one", "has_many", "belongs_to", "many_to_many"}
-	interfaceKinds = []string{"http", "web", "cli", "grpc", "app"}
+	interfaceKinds = []string{"http", "web", "cli", "grpc", "app", "job", "mcp"}
 	// fieldTypes are the neutral entity field types; a field may also name
 	// an entity. Agents map them to each language and database engine.
 	fieldTypes = []string{"string", "int", "int64", "float", "bool", "time", "decimal", "uuid", "bytes", "json"}
@@ -504,10 +504,16 @@ func validateInterfaces(c *collector, x *ctx) {
 				if sf.Route == "" || sf.Method == "" {
 					c.add(Error, sp, "http surfaces need route and method")
 				}
-			case "web", "grpc", "app":
+			case "web", "grpc", "app", "job", "mcp":
 				if sf.Route == "" {
 					c.add(Error, sp+".route", "is required for %s surfaces", iface.Kind)
 				}
+			}
+			if (iface.Kind == "http" || iface.Kind == "web") && sf.Route != "" && !strings.HasPrefix(sf.Route, "/") {
+				c.add(Warning, sp+".route", "%q is not a path: a page event is an `event` with its page as route, a background job belongs in a job interface, an AI tool in an mcp interface, middleware takes the pattern it wraps (/*), and a function called in-process is a module operation, not a surface", sf.Route)
+			}
+			if sf.Event != "" && iface.Kind != "web" {
+				c.add(Error, sp+".event", "events are dispatched by pages; only web surfaces have one")
 			}
 			if sf.Entity != "" && s.Entity(sf.Entity) == nil {
 				c.add(Error, sp+".entity", "unknown entity %q", sf.Entity)
